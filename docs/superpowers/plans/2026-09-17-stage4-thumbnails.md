@@ -87,7 +87,10 @@ Expected: 有 `libwebp`（或 `webp`）。
 - [ ] **Step 4: 记录结论到下方**
 
 ```
-（待填：essentials 是否含 libwebp；HEIC 解码是否成功；ffmpeg 版本号）
+（实测，2026-09-17）ffmpeg 9.0.1-essentials_build（gyan.dev）。
+含 libwebp 与 libwebp_anim 编码器；含 hevc 解码器。
+HEIC 解码实测成功：nokiatech 的 autumn_1440x960.heic（293,608 B）→ WebP 成功。
+本机路径：C:\Users\Raven\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg.Essentials_..._8wekyb3d8bbwe\ffmpeg-9.0.1-essentials_build\bin\ffmpeg.exe
 ```
 
 - [ ] **Step 5: `.gitignore` 增加排除**
