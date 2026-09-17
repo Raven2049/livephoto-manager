@@ -177,6 +177,46 @@ pub fn mark_device_missing(conn: &Connection, device_id: i64) -> rusqlite::Resul
     Ok(())
 }
 
+/// 更新条目的导入状态与错误信息。
+pub fn set_asset_status(
+    conn: &Connection,
+    device_id: i64,
+    base_name: &str,
+    taken_at: i64,
+    status: i64,
+    error: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE asset SET status=?1, error=?2, updated_at=?3
+         WHERE device_id=?4 AND base_name=?5 AND taken_at=?6",
+        params![status, error, now_epoch(), device_id, base_name, taken_at],
+    )?;
+    Ok(())
+}
+
+/// 已「完成」条目的大小映射：`(base_name, taken_at) -> (still_size, movie_size)`。
+pub type ExistingSizes = std::collections::HashMap<(String, i64), (Option<u64>, Option<u64>)>;
+
+/// 已「完成」条目的大小，供增量比对。
+///
+/// **只包含 status >= 1（copied 及以上）的条目**：`pending`(0)/`failed`(4) 不在此列，
+/// 因而会被 `diff_tasks` 视为"仍需传输"，这正是断点续传需要的语义。
+pub fn existing_sizes(conn: &Connection) -> rusqlite::Result<ExistingSizes> {
+    let mut stmt = conn.prepare(
+        "SELECT base_name, taken_at, still_size, movie_size FROM asset WHERE status >= 1",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            (r.get::<_, String>(0)?, r.get::<_, i64>(1)?),
+            (
+                r.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+                r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
+            ),
+        ))
+    })?;
+    rows.collect()
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AssetRow {
     pub id: i64,

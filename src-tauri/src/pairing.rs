@@ -50,6 +50,21 @@ fn ext_of(file_name: &str) -> String {
     }
 }
 
+/// 公开：文件名是否为静态图扩展名。
+pub fn is_still_name(file_name: &str) -> bool {
+    is_still_ext(&ext_of(file_name))
+}
+
+/// 公开：文件名是否为视频扩展名。
+pub fn is_movie_name(file_name: &str) -> bool {
+    is_movie_ext(&ext_of(file_name))
+}
+
+/// 公开：取小写扩展名（不含点）。
+pub fn extension(file_name: &str) -> String {
+    ext_of(file_name)
+}
+
 /// 把「同一目录下的一批文件」按主名配对。输入只含已过滤的媒体文件。
 pub fn pair_files(files: &[(String, u64)]) -> Vec<PairedAsset> {
     let mut map: BTreeMap<String, PairedAsset> = BTreeMap::new();

@@ -2,10 +2,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useLibrary, type ImageItem } from "./stores/library";
+import { useImport } from "./stores/import";
 import { useZoom } from "./composables/useZoom";
 import PhotoGrid from "./components/PhotoGrid.vue";
 
 const lib = useLibrary();
+const imp = useImport();
 const zoom = useZoom(5);
 const grid = ref<InstanceType<typeof PhotoGrid> | null>(null);
 const main = ref<HTMLElement | null>(null);
@@ -13,6 +15,11 @@ const main = ref<HTMLElement | null>(null);
 async function pickLibrary() {
   const dir = await open({ directory: true, multiple: false });
   if (typeof dir === "string") await lib.openLibrary(dir);
+}
+
+async function importFromDevice() {
+  await imp.start();
+  await lib.refresh();
 }
 
 const imageItems = computed<ImageItem[]>(() =>
@@ -48,8 +55,17 @@ onBeforeUnmount(() => {
     <header>
       <button @click="pickLibrary">打开库</button>
       <button :disabled="!lib.root || lib.busy" @click="lib.rescan">重建索引</button>
-      <span v-if="lib.busy">处理中…</span>
+      <button :disabled="!lib.root || imp.running" @click="importFromDevice">
+        从 iPhone 导入
+      </button>
+      <span v-if="imp.running" class="prog">
+        导入中 {{ imp.progress?.done ?? 0 }}/{{ imp.progress?.total ?? "?" }}
+        · {{ imp.progress?.current }} · {{ imp.progress?.bytes_done ?? 0 }} 字节
+        <template v-if="imp.progress?.failed"> · 失败 {{ imp.progress.failed }}</template>
+      </span>
+      <span v-else-if="lib.busy">处理中…</span>
       <span v-else-if="lib.error" class="err">{{ lib.error }}</span>
+      <span v-else-if="imp.error" class="err">{{ imp.error }}</span>
       <span v-else-if="lib.stats">
         共 {{ lib.stats.total }} · 实况 {{ lib.stats.live }} · 照片 {{ lib.stats.photo }} ·
         视频 {{ lib.stats.video }} · 缺失 {{ lib.stats.missing }} · {{ zoom.columns.value }} 列

@@ -1798,6 +1798,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "windows 0.58.0",
 ]
 
 [[package]]

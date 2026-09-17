@@ -24,3 +24,4 @@ percent-encoding = "2.3.2"
 tauri-plugin-dialog = "2.7.3"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 anyhow.workspace = true
+windows = { version = "0.58", features = ["Win32_Devices_PortableDevices", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_UI_Shell_PropertiesSystem", "Win32_Foundation"] }

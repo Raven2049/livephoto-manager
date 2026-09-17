@@ -1,5 +1,7 @@
 mod commands;
 mod db;
+mod device;
+mod importer;
 mod indexer;
 mod library;
 mod pairing;
@@ -53,6 +55,7 @@ pub fn run() {
             commands::scan_library,
             commands::library_stats,
             commands::list_assets,
+            commands::import_from_device,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -71,4 +74,46 @@ fn internal_error(msg: &str) -> tauri::http::Response<Vec<u8>> {
         .header(tauri::http::header::CONTENT_TYPE, "text/plain")
         .body(msg.as_bytes().to_vec())
         .expect("static headers are valid")
+}
+
+/// 守卫测试：设备访问目录下不得出现对设备的写操作。
+#[cfg(test)]
+mod readonly_guard {
+    #[test]
+    fn device_module_contains_no_write_operations() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/device");
+        let mut offenders = Vec::new();
+        for entry in walkdir(dir) {
+            let text = std::fs::read_to_string(&entry).unwrap();
+            for needle in [
+                ".Delete(",
+                ".Move(",
+                ".Copy(",
+                "CreateObject",
+                "CreateResource",
+                "CopyHere",
+            ] {
+                if text.contains(needle) {
+                    offenders.push(format!("{entry}: {needle}"));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "设备访问必须是只读的，发现写操作: {offenders:?}"
+        );
+    }
+
+    fn walkdir(dir: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walkdir(p.to_str().unwrap()));
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p.to_str().unwrap().to_string());
+            }
+        }
+        out
+    }
 }
