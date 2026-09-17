@@ -49,10 +49,48 @@ Windows 访问 iPhone 相册**只能**通过 WPD（Windows Portable Devices）CO
 
 | 未知项 | 影响 | 验证方式 |
 |---|---|---|
-| MTP 是否稳定暴露实况照片的 `.MOV` 文件 | 决定整个方案可行性 | **阶段 0 只读探测程序** |
-| 如何可靠检测"优化 iPhone 储存空间"已开启且原件不在手机 | 决定能否防住"导入一堆糊图" | 同上 |
+| MTP 是否稳定暴露实况照片的 `.MOV` 文件 | 决定整个方案可行性 | ✅ **已实测：成立**（见 §2.4） |
+| 如何可靠检测"优化 iPhone 储存空间"已开启且原件不在手机 | 决定能否防住"导入一堆糊图" | 仍未验证，见 §6.4 |
 
 有第三方实测报告称通过资源管理器/MTP 拷贝时同名 `.MOV` 会被一并拷出，但这**不构成结论**，必须用自己的设备验证。
+
+### 2.4 阶段 0 实测结论（2026-09-17，开发机）
+
+用一次性只读 PowerShell 脚本（Windows Shell COM，**非** WPD 直调）枚举了一台 iPhone 的 MTP 内容：
+
+- **结论：GO。** `.MOV` 动态部分确实通过 MTP 暴露，且能与静态图按主名配对。
+- 计数：文件总数 193（`.mov` 96、`.jpg` 93、`.aae` 4）；同名「静态图 + MOV」配对 **93** 对，孤立 MOV 3，仅静态 0。
+- 设备：`Apple iPhone`（USB `VID_05AC&PID_12A8`），存储卷 `Internal Storage`（约 256 GB）。
+
+实测中发现、与设计假设不符的点（后续计划必须据此调整）：
+
+1. **顶层没有 `DCIM` 目录。** `Internal Storage` 下直接是 `202504_a`，文件全在其下。设计 §4 与计划 Task 9 的白名单「只进 DCIM」需放宽为「递归整卷、按扩展名过滤」。
+2. **`FolderItem.Name` 不含扩展名**（Windows 隐藏已知扩展名），同名 `.MOV` 与 `.JPG` 的 `Name` 完全相同。取真实文件名必须用扩展属性 `System.FileName`（或 `System.FileExtension`），不能靠 `Name` 截取。
+3. **本机静态图是 `.JPG`，没有 `.HEIC`。** 该设备可能设成了「兼容性最佳」。HEIC 路径在本设备上未得到验证。
+4. 存在 `.AAE` 伴生文件与 `IMG_E….`/`IMG_O….`（编辑版/原版）变体，配对逻辑需把它们归入 `Other`、并按 stem 正确区分。
+5. `FolderItem.Size` 返回 0，字节数须读扩展属性 `System.Size`。
+
+> ⚠️ 本次用的是 Shell COM 通道，**不是**最终实现要走的 WPD COM 直调。因此 Task 10 的 Rust WPD 探测仍然必须做，并与本次计数（193）交叉核对——两条独立通道给出一致结果，才能确认 WPD 层实现正确。
+
+### 2.5 WPD 直调实测结论（2026-09-17，`crates/probe`）
+
+计划 1 的 Rust 只读探测程序（直接用 `windows` crate 调 WPD COM，`IPortableDeviceManager` / `IPortableDevice` / `IPortableDeviceContent` / `IPortableDeviceProperties`）：
+
+- **结论：GO，且与 Shell 通道交叉核对。**
+- WPD 计数：文件总数 **1987**（`.mov` 991、`.jpg` 971、`.png` 15、`.aae` 8、`.gif` 2）；同名「静态图 + MOV」配对 **942** 对，仅静态 46，仅视频 49。
+- 设备信息：`Apple iPhone` / 型号 `Apple iPhone` / 序列号（打码）`******4RV0`。
+- 存储：`Internal Storage`，容量约 256 GB，可用约 80.5 GB（`WPD_STORAGE_CAPACITY` / `WPD_STORAGE_FREE_SPACE_IN_BYTES`）。
+
+**交叉核对结果：WPD（1987）远多于 Shell（193）。** 这不是 bug——资源管理器对 iPhone 的 MTP 视图只暴露了 `Internal Storage\202504_a` 一个目录，而 WPD 直调能看到整机全部相册/目录。结论：**必须走 WPD 直调，不能依赖资源管理器视图来清点设备内容**（设计 §2.2 的判断得到实测支持）。
+
+本次还确认了几处实现细节（后续计划沿用）：
+
+1. **`PWSTR` 取字符串必须处理结尾 NUL。** `pwstr.as_wide()` 返回的切片不含终止符；把它当 `PCWSTR` 直接传给 COM（如 `IPortableDevice::Open`）会读到越界内存并返回 `E_POINTER (0x80004003)`。凡自行构造宽字符串，必须补 `0`。
+2. **`IPortableDevice::Open` 的 PnP 设备 ID 取自 `IPortableDeviceManager::GetDevices`**，且系统上可能同时存在多个 WPD 设备（实测本机 `GetDevices` 返回 2 个，其中一个是把本机磁盘映射成 WPD 的设备）。必须按 `GetDeviceFriendlyName` 过滤出 iPhone（含 `iPhone`/`Apple`）再 `Open`，否则会枚举到本机磁盘。
+3. `windows` 0.58 已从 SDK 自动生成并导出全部所需 `WPD_*` 常量，**无需手工抄录头文件**。但 `PROPERTYKEY` 类型位于 `Win32::UI::Shell::PropertiesSystem`（不是 `Win32::Foundation`），需启用 feature `Win32_UI_Shell_PropertiesSystem`。
+4. `IPortableDevice::Open` 的 client info 传 `None` 亦可，但实测显式创建 `CLSID_PortableDeviceValues` 更稳。
+5. 未读取任何文件字节：本阶段只读取元数据（名字/大小/时间/内容类型），**未下载任何照片**，符合设计 §12 与计划「只读」要求。因此**传输速率与并发流数量的关系仍未实测**（附录 B 第 3 项、§12 对应风险项）——该数据只能在实际落地文件传输时采集，留待计划 3（导入管道）。
+6. 系统上可能存在对 `Open` 会挂起的"幻影"WPD 设备（实测：拔掉 iPhone 后 `GetDevices` 仍返回 1 个把本机磁盘映射成 WPD 的设备，对其 `Open` 无限期阻塞）。实现必须按友好名只打开 Apple/iPhone 设备，无匹配即当作无设备退出。
 
 ---
 
