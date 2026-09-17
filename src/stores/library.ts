@@ -9,6 +9,7 @@ export interface AssetRow {
   base_name: string;
   still_path: string | null;
   movie_path: string | null;
+  thumb_path: string | null;
   missing: boolean;
 }
 
@@ -62,6 +63,21 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
+  const thumbs = ref<{ total: number; done: number; failed: number } | null>(null);
+
+  async function generateThumbs() {
+    busy.value = true;
+    error.value = null;
+    try {
+      thumbs.value = await invoke("generate_thumbs");
+      await refresh();
+    } catch (e) {
+      error.value = String(e);
+    } finally {
+      busy.value = false;
+    }
+  }
+
   async function refresh() {
     stats.value = await invoke<LibraryStats>("library_stats");
     // 本计划先一次性取前 5000 条；分页 + 虚拟滚动的联动属后续计划。
@@ -71,5 +87,16 @@ export const useLibrary = defineStore("library", () => {
     });
   }
 
-  return { root, assets, stats, busy, error, openLibrary, rescan, refresh };
+  return {
+    root,
+    assets,
+    stats,
+    busy,
+    error,
+    thumbs,
+    openLibrary,
+    rescan,
+    generateThumbs,
+    refresh,
+  };
 });

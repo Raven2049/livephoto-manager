@@ -24,9 +24,10 @@ async function importFromDevice() {
 
 const imageItems = computed<ImageItem[]>(() =>
   lib.assets
-    .filter((a) => !a.missing && a.still_path)
+    .filter((a) => !a.missing && (a.thumb_path || a.still_path))
     .map((a) => ({
-      path: a.still_path as string,
+      // 优先用缩略图（HEIC 原图 WebView2 解不了）。
+      path: (a.thumb_path || a.still_path) as string,
       name: a.base_name,
       size: 0,
     })),
@@ -55,6 +56,7 @@ onBeforeUnmount(() => {
     <header>
       <button @click="pickLibrary">打开库</button>
       <button :disabled="!lib.root || lib.busy" @click="lib.rescan">重建索引</button>
+      <button :disabled="!lib.root || lib.busy" @click="lib.generateThumbs">生成缩略图</button>
       <button :disabled="!lib.root || imp.running" @click="importFromDevice">
         从 iPhone 导入
       </button>
@@ -64,6 +66,9 @@ onBeforeUnmount(() => {
         <template v-if="imp.progress?.failed"> · 失败 {{ imp.progress.failed }}</template>
       </span>
       <span v-else-if="lib.busy">处理中…</span>
+      <span v-else-if="lib.thumbs">
+        缩略图 {{ lib.thumbs.done }}/{{ lib.thumbs.total }}（失败 {{ lib.thumbs.failed }}）
+      </span>
       <span v-else-if="lib.error" class="err">{{ lib.error }}</span>
       <span v-else-if="imp.error" class="err">{{ imp.error }}</span>
       <span v-else-if="lib.stats">
