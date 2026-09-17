@@ -51,8 +51,11 @@ struct WpdTransfer<'a> {
 }
 
 impl Transfer for WpdTransfer<'_> {
-    fn fetch(&mut self, object_id: &str, dest: &Path) -> anyhow::Result<u64> {
-        download_object(self.content, object_id, dest, |_| {})
+    fn fetch(&mut self, object_ref: &str, dest: &Path) -> anyhow::Result<u64> {
+        // object_ref 是持久 ID；iOS 句柄会失效，必须在传输前重解析成新鲜对象 ID。
+        let object_id = crate::device::resolve_object_id(self.content, object_ref)
+            .map_err(|e| anyhow::anyhow!("重解析对象 ID 失败: {e:#}"))?;
+        download_object(self.content, &object_id, dest, |_| {})
     }
 }
 
@@ -92,7 +95,8 @@ pub async fn import_from_device(
         let device_files: Vec<DeviceFile> = files
             .iter()
             .map(|f| DeviceFile {
-                object_id: f.object_id.clone(),
+                // 传给管道的是**持久 ID**，由 WPD 传输实现负责重解析成新鲜句柄。
+                object_id: f.persistent_id.clone(),
                 name: f.name.clone(),
                 size: f.size,
                 taken_at: f.taken_at,

@@ -11,14 +11,14 @@ pub mod keys;
 pub mod transfer;
 
 use anyhow::{bail, Context, Result};
-use windows::core::{GUID, PCWSTR, PROPVARIANT, PWSTR};
+use windows::core::{BSTR, GUID, PCWSTR, PROPVARIANT, PWSTR};
 use windows::Win32::Devices::PortableDevices::{
     IEnumPortableDeviceObjectIDs, IPortableDevice, IPortableDeviceContent,
-    IPortableDeviceKeyCollection, IPortableDeviceManager, IPortableDeviceProperties,
-    IPortableDeviceValues, PortableDevice, PortableDeviceFTM, PortableDeviceKeyCollection,
-    PortableDeviceManager, PortableDeviceValues, WPD_CONTENT_TYPE_FOLDER,
-    WPD_CONTENT_TYPE_FUNCTIONAL_OBJECT, WPD_CONTENT_TYPE_IMAGE, WPD_CONTENT_TYPE_VIDEO,
-    WPD_DEVICE_OBJECT_ID,
+    IPortableDeviceKeyCollection, IPortableDeviceManager, IPortableDevicePropVariantCollection,
+    IPortableDeviceProperties, IPortableDeviceValues, PortableDevice, PortableDeviceFTM,
+    PortableDeviceKeyCollection, PortableDeviceManager, PortableDevicePropVariantCollection,
+    PortableDeviceValues, WPD_CONTENT_TYPE_FOLDER, WPD_CONTENT_TYPE_FUNCTIONAL_OBJECT,
+    WPD_CONTENT_TYPE_IMAGE, WPD_CONTENT_TYPE_VIDEO, WPD_DEVICE_OBJECT_ID,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
@@ -63,7 +63,8 @@ pub enum FileKind {
 
 #[derive(Debug, Clone)]
 pub struct MediaFile {
-    pub object_id: String,
+    /// 稳定标识。iOS 的对象句柄会失效，传输前必须用它重新解析出新鲜句柄。
+    pub persistent_id: String,
     pub name: String,
     pub size: u64,
     pub taken_at: Option<i64>,
@@ -262,6 +263,7 @@ impl WpdDevice {
                 WPD_OBJECT_SIZE,
                 WPD_OBJECT_DATE_CREATED,
                 WPD_OBJECT_CONTENT_TYPE,
+                WPD_OBJECT_PERSISTENT_UNIQUE_ID,
             ])?;
             let mut out = Vec::new();
             self.walk(WPD_DEVICE_OBJECT_ID, &keys, &mut out)?;
@@ -297,7 +299,6 @@ impl WpdDevice {
                 if p.is_null() {
                     continue;
                 }
-                let object_id = p.to_string().unwrap_or_default();
                 let obj = PCWSTR(p.0);
 
                 let values = self.properties.GetValues(obj, keys).ok();
@@ -364,9 +365,17 @@ impl WpdDevice {
                         .ok()
                         .and_then(|pv| taken_at_from_pv(&pv))
                 });
+                let persistent_id = values
+                    .as_ref()
+                    .and_then(|v| {
+                        v.GetStringValue(&WPD_OBJECT_PERSISTENT_UNIQUE_ID)
+                            .ok()
+                            .and_then(|s| pwstr_to_string_and_free(s))
+                    })
+                    .unwrap_or_default();
 
                 out.push(MediaFile {
-                    object_id,
+                    persistent_id,
                     name: name.unwrap_or_default(),
                     size,
                     taken_at,
@@ -385,6 +394,40 @@ impl WpdDevice {
         }
 
         Ok(())
+    }
+}
+
+/// 用稳定的 `persistent_id` 换取当前有效的对象 ID。
+///
+/// **为什么必须这样：** 实测（阶段 3）iOS 上从枚举拿到的对象句柄在属性读取后会失效，
+/// 直接用于 `GetStream` 会拿到**错误对象**的数据（实测错位 2 个）。必须先重解析。
+pub fn resolve_object_id(content: &IPortableDeviceContent, persistent_id: &str) -> Result<String> {
+    unsafe {
+        let col: IPortableDevicePropVariantCollection =
+            CoCreateInstance(&PortableDevicePropVariantCollection, None, CLSCTX_ALL)
+                .context("创建 PropVariantCollection 失败")?;
+        let pv = PROPVARIANT::from(persistent_id);
+        col.Add(&pv).context("加入 persistent id 失败")?;
+
+        let out = content
+            .GetObjectIDsFromPersistentUniqueIDs(&col)
+            .context("GetObjectIDsFromPersistentUniqueIDs 失败")?;
+
+        let count = 0u32;
+        out.GetCount(&count).context("读取解析结果数量失败")?;
+        if count == 0 {
+            bail!("无法把 persistent id 解析成对象 ID: {persistent_id}");
+        }
+
+        let value = PROPVARIANT::new();
+        out.GetAt(0, &value).context("读取解析结果失败")?;
+        let s = BSTR::try_from(&value)
+            .map(|b| b.to_string())
+            .unwrap_or_default();
+        if s.is_empty() {
+            bail!("解析出的对象 ID 为空");
+        }
+        Ok(s)
     }
 }
 
@@ -481,5 +524,76 @@ mod tests {
             "iPhone15Pro-3F9A2C"
         );
         assert_eq!(folder_name_for("", None), "Device-000000");
+    }
+
+    /// 实机冒烟：需要插着 iPhone。跑：
+    ///   cargo test -p liveporter real_device_transfer_smoke -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires a connected iPhone"]
+    fn real_device_transfer_smoke() {
+        let _com = ComGuard::new().unwrap();
+        let dev = WpdDevice::open_first().unwrap();
+        let info = dev.info().clone();
+        println!(
+            "device={:?} model={:?} serial={:?} folder={}",
+            info.friendly_name, info.model, info.serial, info.folder_name
+        );
+
+        let media = dev.list_media().unwrap();
+        println!("media count = {}", media.len());
+
+        let dir = std::env::temp_dir().join("lpm_device_smoke");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let n = std::env::var("LPM_SMOKE_N")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(30);
+
+        let (mut ok, mut fail, mut bytes, mut wrong) = (0u32, 0u32, 0u64, 0u32);
+        for (i, f) in media.iter().take(n).enumerate() {
+            let dest = dir.join(format!("{i:04}_{}", f.name));
+            let t0 = std::time::Instant::now();
+            // 先重解析持久 ID → 新鲜对象 ID，再下载（iOS 句柄会失效）。
+            let resolved = resolve_object_id(dev.content(), &f.persistent_id);
+            let object_id = match resolved {
+                Ok(id) => id,
+                Err(e) => {
+                    fail += 1;
+                    println!("[{i:02}] RESOLVE-FAIL {:40} : {e:#}", f.name);
+                    continue;
+                }
+            };
+            match transfer::download_object(dev.content(), &object_id, &dest, |_| {}) {
+                Ok(w) => {
+                    ok += 1;
+                    bytes += w;
+                    let size_ok = w == f.size;
+                    if !size_ok {
+                        wrong += 1;
+                    }
+                    println!(
+                        "[{i:02}] OK   {:40} reported={:>10} got={:>10} size_ok={} {:.1}s",
+                        f.name,
+                        f.size,
+                        w,
+                        size_ok,
+                        t0.elapsed().as_secs_f32()
+                    );
+                }
+                Err(e) => {
+                    fail += 1;
+                    println!(
+                        "[{i:02}] FAIL {:40} : {e:#} ({:.1}s)",
+                        f.name,
+                        t0.elapsed().as_secs_f32()
+                    );
+                }
+            }
+        }
+        println!("SUMMARY ok={ok} fail={fail} wrong_content={wrong} bytes={bytes}");
+        assert!(ok > 0, "至少应有一个文件成功");
+        assert_eq!(wrong, 0, "不应有内容/大小不符的文件");
     }
 }

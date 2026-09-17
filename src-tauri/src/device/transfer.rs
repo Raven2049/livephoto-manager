@@ -92,8 +92,14 @@ pub fn download_object(
     }
     writer.flush()?;
 
+    // 显式按序释放：先放流、再放 resources，并留一小段间隔，让 iOS 在设备侧把上一个
+    // 会话真正收尾，再开始下一个 GetStream（实测 MOV 的间歇失败 0x80042007 与此时序有关）。
+    drop(stream);
+    drop(resources);
+    std::thread::sleep(std::time::Duration::from_millis(250));
+
     // 注意：这里**不要**调用 `resources.Cancel()`。实测（阶段 3 Task 8）在每次成功读取后
-    // 调 Cancel 会让后续 GetStream 大量失败（iOS 返回 0x80042007）。Cancel 只应用于
-    // 真正的用户取消场景。详见 docs/superpowers/notes/2026-09-17-import-smoke.md。
+    // 调 Cancel 会让后续 GetStream 大量失败。Cancel 只应用于真正的用户取消场景。
+    // 详见 docs/superpowers/notes/2026-09-17-import-smoke.md。
     Ok(total)
 }
