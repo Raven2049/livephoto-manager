@@ -166,72 +166,22 @@ pub async fn import_from_device(
     .map_err(|e| format!("{e:#}"))
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ThumbSummary {
-    pub total: usize,
-    pub done: usize,
-    pub failed: usize,
-}
-
 /// 为当前库里「缺少缩略图」的条目补生成缩略图（回填已有库）。
 #[tauri::command]
 pub async fn generate_thumbs(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<ThumbSummary, String> {
+) -> Result<importer::ThumbSummary, String> {
     let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
 
-    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<ThumbSummary> {
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<importer::ThumbSummary> {
         let lib = Library::open(&root)?;
         let conn = crate::db::open(&lib.db_path())?;
         let mut thumbs = FfmpegThumbs {
             bin: crate::ffmpeg::find_ffmpeg()?,
         };
-
-        let jobs = crate::db::assets_missing_thumbs(&conn)?;
-        let total = jobs.len();
-        let (mut done, mut failed) = (0usize, 0usize);
-
-        for job in &jobs {
-            let src = std::path::PathBuf::from(&job.source_path);
-            match thumbs.make(&src, &lib.thumbs_dir()) {
-                Ok(tp) => {
-                    crate::db::set_thumb_path(
-                        &conn,
-                        job.device_id,
-                        &job.base_name,
-                        job.taken_at,
-                        &tp.to_string_lossy(),
-                    )?;
-                    crate::db::set_asset_status(
-                        &conn,
-                        job.device_id,
-                        &job.base_name,
-                        job.taken_at,
-                        importer::STATUS_TRANSCODED,
-                        None,
-                    )?;
-                    done += 1;
-                }
-                Err(e) => {
-                    failed += 1;
-                    eprintln!("缩略图失败 {}: {e:#}", job.base_name);
-                }
-            }
-            let _ = app.emit(
-                "thumbs://progress",
-                ThumbSummary {
-                    total,
-                    done,
-                    failed,
-                },
-            );
-        }
-
-        Ok(ThumbSummary {
-            total,
-            done,
-            failed,
+        importer::backfill_thumbs(&lib, &conn, &mut thumbs, |s| {
+            let _ = app.emit("thumbs://progress", s);
         })
     })
     .await

@@ -150,6 +150,61 @@ pub trait Thumbs {
     fn make(&mut self, source: &Path, thumbs_dir: &Path) -> anyhow::Result<PathBuf>;
 }
 
+/// 缩略图回填进度/结果。
+#[derive(Debug, Clone, Default, serde::Serialize, PartialEq, Eq)]
+pub struct ThumbSummary {
+    pub total: usize,
+    pub done: usize,
+    pub failed: usize,
+}
+
+/// 为库里「缺少缩略图」的条目补生成缩略图。
+/// 命令 `generate_thumbs` 与测试共用此函数，避免逻辑重复。
+pub fn backfill_thumbs(
+    lib: &crate::library::Library,
+    conn: &Connection,
+    thumbs: &mut dyn Thumbs,
+    mut on_progress: impl FnMut(&ThumbSummary),
+) -> anyhow::Result<ThumbSummary> {
+    let jobs = crate::db::assets_missing_thumbs(conn)?;
+    let total = jobs.len();
+    let mut summary = ThumbSummary {
+        total,
+        ..Default::default()
+    };
+
+    for job in &jobs {
+        let src = PathBuf::from(&job.source_path);
+        match thumbs.make(&src, &lib.thumbs_dir()) {
+            Ok(tp) => {
+                crate::db::set_thumb_path(
+                    conn,
+                    job.device_id,
+                    &job.base_name,
+                    job.taken_at,
+                    &tp.to_string_lossy(),
+                )?;
+                crate::db::set_asset_status(
+                    conn,
+                    job.device_id,
+                    &job.base_name,
+                    job.taken_at,
+                    STATUS_TRANSCODED,
+                    None,
+                )?;
+                summary.done += 1;
+            }
+            Err(e) => {
+                summary.failed += 1;
+                eprintln!("缩略图失败 {}: {e:#}", job.base_name);
+            }
+        }
+        on_progress(&summary);
+    }
+
+    Ok(summary)
+}
+
 /// 导入进度（同时用于 Tauri 事件 payload）。
 #[derive(Debug, Clone, Default, serde::Serialize, PartialEq, Eq)]
 pub struct ImportProgress {
@@ -579,5 +634,54 @@ mod tests {
             .unwrap();
         assert_eq!(status, STATUS_COPIED, "缩略图失败不应把条目判为导入失败");
         assert!(err.unwrap().contains("缩略图失败"));
+    }
+
+    #[test]
+    fn backfill_generates_missing_thumbnails() {
+        let conn = db::open_in_memory().unwrap();
+        let dev = db::upsert_device(&conn, "SN1", "m", None, "d").unwrap();
+
+        let root = std::env::temp_dir().join("lpm_backfill_test");
+        let _ = std::fs::remove_dir_all(&root);
+        let lib = crate::library::Library::open(&root).unwrap();
+
+        let src = lib
+            .originals_dir()
+            .join("d")
+            .join("2024")
+            .join("IMG_1.HEIC");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"fake").unwrap();
+
+        let a = PairedAsset {
+            base_name: "IMG_1".into(),
+            kind: KIND_PHOTO,
+            integrity: INTEGRITY_STILL_ONLY,
+            still: Some(FileRef {
+                path: src.to_string_lossy().to_string(),
+                ext: "heic".into(),
+                size: 4,
+            }),
+            movie: None,
+        };
+        db::upsert_asset(&conn, dev, &a, 0).unwrap();
+        db::set_asset_status(&conn, dev, "IMG_1", 0, STATUS_COPIED, None).unwrap();
+
+        let mut thumbs = FakeThumbs { fail: false };
+        let s = backfill_thumbs(&lib, &conn, &mut thumbs, |_| {}).unwrap();
+        assert_eq!(s.total, 1);
+        assert_eq!(s.done, 1);
+
+        let (tp, status): (Option<String>, i64) = conn
+            .query_row("SELECT thumb_path, status FROM asset", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert!(tp.unwrap().contains("fake.webp"));
+        assert_eq!(status, STATUS_TRANSCODED);
+
+        // 第二次没有可回填的条目
+        let s2 = backfill_thumbs(&lib, &conn, &mut thumbs, |_| {}).unwrap();
+        assert_eq!(s2.total, 0);
     }
 }
