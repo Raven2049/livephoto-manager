@@ -161,11 +161,17 @@
    不再需要"设备可能设成了兼容性最佳"这种猜测。
 3. 并发/缓冲优化仍然无意义（瓶颈本就来自这里，已消除）。
 
-## 十、待办：拍摄时间解析未成功
+## 十、拍摄时间解析（已解决）
 
-上述导入的文件**全部落在 `originals/AppleiPhone-CY4RV0/unknown/`**，说明
-`taken_at`（计划 4 Task 3）没有解析出来，`year` 退化为 `unknown`——即 `WPD_OBJECT_DATE_CREATED`
-转 epoch 的那段**没有生效**（原计划预判 `PropVariantToDouble` 对 `VT_DATE` 可能失败，实测确实失败；
-也可能 iOS 返回的是 `VT_FILETIME` 而非 `VT_DATE`）。**需专门查证**：打印该 PROPVARIANT 的 `vt`
-与各转换结果，据此改用 `VT_FILETIME` → `SYSTEMTIME`/`FILETIME` 的路径，或 `PropVariantToFileTime`。
-在修好之前，年份目录一律是 `unknown`（功能可用，但不符合设计 §4 的「按拍摄年份分目录」）。
+阶段 3 导入的文件曾**全部落在 `originals/<device>/unknown/`**，即 `taken_at` 解析失败。
+
+**诊断（阶段 4）：** `WPD_OBJECT_DATE_CREATED` 的类型是 `VT_DATE`（实测 `vt=0x0007`），
+但 `PropVariantToDouble` 对它**返回失败**（`f64=None`）；而 `PropVariantToBSTR` 能拿到
+形如 `"2026/04/30:19:42:06.000"` 的本地时间字符串。
+
+**修复：** `taken_at_from_pv` 改为「先试 double，失败则解析 BSTR 字符串」；
+新增手写解析（连续数字分组取前 6 个整数 + Howard Hinnant 民用历→epoch），不引 chrono。
+实测已能解析出正确年份（如 `2026/04/30` → 2026）。有单测覆盖解析与历法。
+
+> 注意：修复前导入到 `unknown/` 的旧文件，业务键 `(device, base_name, taken_at)` 已变化，
+> 修复后重导会被当成新条目。建议把受影响的库清空重导。

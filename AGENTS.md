@@ -42,7 +42,7 @@
 - **iOS 对象句柄易失**：必须用 `WPD_OBJECT_PERSISTENT_UNIQUE_ID` 重解析后再取流，否则会**静默写入错误对象的数据**（曾实测错位 2 个）。传输类改动务必校验字节数（已在 `importer::run_tasks` 加了校验）。
 - **会话会被强杀卡死**：只能物理拔插恢复；产品需加"会话失效请重插"引导。
 - **并发无收益（已终测）**：根因修复并移除无谓的 250ms 释放延迟后，1 线程 **26 MB/s**、2 线程 21.9、4 线程 23.6（`ERROR_BUSY`）。**维持并发 1**；`transfer.rs` 里不要再加回释放延迟。
-- **待办**：`taken_at` 解析未成功（年份目录全是 `unknown`）——`WPD_OBJECT_DATE_CREATED` 的 `VT_DATE` 转换需查证。
+- **`taken_at` 解析**：`WPD_OBJECT_DATE_CREATED` 是 `VT_DATE`，`PropVariantToDouble` 实测失败；已改为「先试 double，失败则解析 `PropVariantToBSTR` 的字符串」。修复前导入到 `unknown/` 的库需清空重导。
 - **历史警告**：修复前的界面导入曾在 `D:\图片\Pictures\iPhone` 留下 66 个内容错误的条目；该库**已清理**（目录为空），可重导。
 
 实测关键结论（动手前先读设计文档 §2.5）：
