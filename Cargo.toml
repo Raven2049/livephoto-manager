@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/probe"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+# license 待定（设计文档附录 A 决策 6）。定下来之前先不填，
+# 填错会让 `cargo publish` 等工具产生错误的元数据。
+# license = ""
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1

@@ -1,0 +1,19 @@
+[package]
+name = "probe"
+edition.workspace = true
+version.workspace = true
+# license 待定，见 workspace 根说明
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Devices_PortableDevices",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_Foundation",
+] }

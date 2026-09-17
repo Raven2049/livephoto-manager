@@ -7,6 +7,7 @@ dist-ssr/
 *.local
 
 # Rust 构建产物
+target/
 src-tauri/target/
 
 # 编辑器 / IDE
