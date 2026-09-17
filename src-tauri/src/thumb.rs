@@ -64,6 +64,34 @@ pub fn make_thumb_for_movie(ffmpeg_bin: &Path, input: &Path, thumbs_dir: &Path) 
     make(ffmpeg_bin, input, thumbs_dir, true)
 }
 
+/// 预览片文件名：`<hash>.mp4`。
+pub fn preview_file_name(hash: &str) -> String {
+    format!("{hash}.mp4")
+}
+
+/// 为视频生成 480p H.264 预览片，返回路径。已存在则直接复用。
+pub fn make_preview_for_movie(
+    ffmpeg_bin: &Path,
+    input: &Path,
+    previews_dir: &Path,
+) -> Result<PathBuf> {
+    std::fs::create_dir_all(previews_dir)?;
+    let out = previews_dir.join(preview_file_name(&content_hash(input)?));
+    if out.is_file() {
+        return Ok(out);
+    }
+    let mut tmp = out.clone().into_os_string();
+    tmp.push(".part");
+    let tmp = PathBuf::from(tmp);
+
+    if let Err(e) = ffmpeg::run(ffmpeg_bin, &ffmpeg::preview_args(input, &tmp)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    std::fs::rename(&tmp, &out)?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +114,29 @@ mod tests {
     #[test]
     fn thumb_name_has_webp_extension() {
         assert_eq!(thumb_file_name("abc123"), "abc123.webp");
+    }
+
+    #[test]
+    fn preview_name_has_mp4_extension() {
+        assert_eq!(preview_file_name("abc123"), "abc123.mp4");
+    }
+
+    /// 需要本机有 ffmpeg：设 LIVEPORTER_FFMPEG 与 LPM_PREVIEW_INPUT 后跑
+    ///   cargo test -p liveporter real_preview_smoke -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires ffmpeg"]
+    fn real_preview_smoke() {
+        let bin = ffmpeg::find_ffmpeg().unwrap();
+        let input =
+            std::env::var("LPM_PREVIEW_INPUT").expect("设 LPM_PREVIEW_INPUT 指向一个 MOV/MP4");
+        let out_dir = std::env::temp_dir().join("lpm_preview_smoke");
+        let _ = std::fs::remove_dir_all(&out_dir);
+        let p = make_preview_for_movie(&bin, Path::new(&input), &out_dir).unwrap();
+        println!(
+            "preview = {p:?} ({} bytes)",
+            std::fs::metadata(&p).unwrap().len()
+        );
+        assert!(std::fs::metadata(&p).unwrap().len() > 0);
     }
 
     /// 需要本机有 ffmpeg：设 LIVEPORTER_FFMPEG 与 LPM_THUMB_INPUT 后跑

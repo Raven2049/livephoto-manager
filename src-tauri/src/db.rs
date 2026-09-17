@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::pairing::{FileRef, PairedAsset};
 
@@ -210,6 +210,30 @@ pub fn set_thumb_path(
     Ok(())
 }
 
+/// 取一个条目的视频源路径（用于生成预览片）。不存在返回 None。
+pub fn asset_movie_path(conn: &Connection, asset_id: i64) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT movie_path FROM asset WHERE id = ?1",
+        params![asset_id],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(|o| o.flatten())
+}
+
+/// 写入预览片路径。
+pub fn set_preview_path(
+    conn: &Connection,
+    asset_id: i64,
+    preview_path: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE asset SET preview_path=?1, updated_at=?2 WHERE id=?3",
+        params![preview_path, now_epoch(), asset_id],
+    )?;
+    Ok(())
+}
+
 /// 已「完成」条目的大小映射：`(base_name, taken_at) -> (still_size, movie_size)`。
 pub type ExistingSizes = std::collections::HashMap<(String, i64), (Option<u64>, Option<u64>)>;
 
@@ -369,6 +393,46 @@ mod tests {
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
         assert!(path.exists());
+    }
+
+    #[test]
+    fn asset_movie_path_and_preview_path() {
+        use crate::pairing::{FileRef, PairedAsset, KIND_LIVE};
+        let conn = open_in_memory().unwrap();
+        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
+
+        let a = PairedAsset {
+            base_name: "IMG_1".into(),
+            kind: KIND_LIVE,
+            integrity: 0,
+            still: Some(FileRef {
+                path: "s.heic".into(),
+                ext: "heic".into(),
+                size: 1,
+            }),
+            movie: Some(FileRef {
+                path: "m.mov".into(),
+                ext: "mov".into(),
+                size: 2,
+            }),
+        };
+        upsert_asset(&conn, dev, &a, 100).unwrap();
+        let id: i64 = conn
+            .query_row("SELECT id FROM asset", [], |r| r.get(0))
+            .unwrap();
+
+        assert_eq!(
+            asset_movie_path(&conn, id).unwrap().as_deref(),
+            Some("m.mov")
+        );
+        // 不存在的 id → None
+        assert!(asset_movie_path(&conn, 9999).unwrap().is_none());
+
+        set_preview_path(&conn, id, "p.mp4").unwrap();
+        let p: Option<String> = conn
+            .query_row("SELECT preview_path FROM asset", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(p.as_deref(), Some("p.mp4"));
     }
 
     #[test]

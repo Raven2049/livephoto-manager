@@ -85,6 +85,37 @@ pub fn movie_thumb_args(input: &Path, output: &Path) -> Vec<String> {
     ]
 }
 
+/// 从视频生成 480p H.264 预览片的参数（不含程序名）。
+/// 无音轨、截取前 6 秒、`faststart` 便于快速起播。
+///
+/// 与缩略图一样用 `-filter_complex`（保持与 HEIC 多流场景一致；短视频单流亦适用）。
+pub fn preview_args(input: &Path, output: &Path) -> Vec<String> {
+    vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-y".into(),
+        "-i".into(),
+        input.to_string_lossy().into_owned(),
+        "-t".into(),
+        "6".into(),
+        "-filter_complex".into(),
+        "scale=480:-2".into(),
+        "-an".into(),
+        "-c:v".into(),
+        "libx264".into(),
+        "-crf".into(),
+        "28".into(),
+        "-preset".into(),
+        "veryfast".into(),
+        "-movflags".into(),
+        "+faststart".into(),
+        "-f".into(),
+        "mp4".into(),
+        output.to_string_lossy().into_owned(),
+    ]
+}
+
 /// 执行 ffmpeg，失败时带上 stderr。
 pub fn run(ffmpeg: &Path, args: &[String]) -> anyhow::Result<()> {
     let output = std::process::Command::new(ffmpeg).args(args).output()?;
@@ -116,5 +147,15 @@ mod tests {
         let ss = a.iter().position(|x| x == "-ss").unwrap();
         let i = a.iter().position(|x| x == "-i").unwrap();
         assert!(ss < i, "-ss 应在 -i 之前以快速定位");
+    }
+
+    #[test]
+    fn preview_args_are_480p_h264_muted() {
+        let a = preview_args(Path::new("in.mov"), Path::new("out.mp4.part"));
+        assert!(a.contains(&"scale=480:-2".to_string()));
+        assert!(a.contains(&"libx264".to_string()));
+        assert!(a.contains(&"-an".to_string()));
+        assert!(a.contains(&"6".to_string()));
+        assert_eq!(a.last().unwrap(), "out.mp4.part");
     }
 }

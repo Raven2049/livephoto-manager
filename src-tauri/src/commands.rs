@@ -201,3 +201,34 @@ pub async fn generate_thumbs(
 pub fn cancel_import(state: tauri::State<'_, AppState>) {
     state.request_cancel();
 }
+
+/// 确保某条目的预览片存在；返回其绝对路径（前端用 `lpm://` 加载）。
+/// 无视频源的条目返回明确错误。
+#[tauri::command]
+pub async fn ensure_preview(
+    asset_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<String> {
+        let lib = Library::open(&root)?;
+        let conn = crate::db::open(&lib.db_path())?;
+
+        let movie = crate::db::asset_movie_path(&conn, asset_id)?
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("该条目没有视频源，无法生成预览"))?;
+
+        let bin = crate::ffmpeg::find_ffmpeg()?;
+        let p = crate::thumb::make_preview_for_movie(
+            &bin,
+            std::path::Path::new(&movie),
+            &lib.previews_dir(),
+        )?;
+        crate::db::set_preview_path(&conn, asset_id, &p.to_string_lossy())?;
+        Ok(p.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
+}

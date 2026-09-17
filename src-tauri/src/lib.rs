@@ -60,6 +60,7 @@ pub fn run() {
             commands::import_from_device,
             commands::generate_thumbs,
             commands::cancel_import,
+            commands::ensure_preview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
