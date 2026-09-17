@@ -80,12 +80,60 @@ pub struct DeviceInfo {
 }
 
 /// OLE Automation 日期 → Unix epoch 秒。取不到返回 None。
+///
+/// 实测（阶段 4）：iPhone 的 `WPD_OBJECT_DATE_CREATED` 是 `VT_DATE`（vt=0x0007），
+/// 但 `PropVariantToDouble` 对它**返回失败**；而 `PropVariantToBSTR` 能得到
+/// 形如 `"2026/04/30:19:42:06.000"` 的本地时间字符串。因此优先试 double，
+/// 失败则解析字符串。
 pub fn taken_at_from_pv(pv: &PROPVARIANT) -> Option<i64> {
-    let ole = f64::try_from(pv).ok()?;
-    if ole <= 0.0 {
+    if let Ok(ole) = f64::try_from(pv) {
+        if ole > 0.0 {
+            return Some(((ole - 25569.0) * 86400.0) as i64);
+        }
+    }
+    let s = BSTR::try_from(pv).ok()?.to_string();
+    parse_date_string(&s)
+}
+
+/// 解析形如 `YYYY/MM/DD:HH:MM:SS(.mmm)` 的本地时间字符串为 epoch 秒。
+/// 按“连续数字分组”取前 6 个整数，兼容分隔符差异。
+pub fn parse_date_string(s: &str) -> Option<i64> {
+    let mut nums: Vec<i64> = Vec::new();
+    let mut cur = String::new();
+    for ch in s.chars() {
+        if ch.is_ascii_digit() {
+            cur.push(ch);
+        } else if !cur.is_empty() {
+            nums.push(cur.parse().ok()?);
+            cur.clear();
+        }
+    }
+    if !cur.is_empty() {
+        nums.push(cur.parse().ok()?);
+    }
+    if nums.len() < 6 {
         return None;
     }
-    Some(((ole - 25569.0) * 86400.0) as i64)
+    let (y, m, d, hh, mm, ss) = (
+        nums[0] as i32,
+        nums[1] as i32,
+        nums[2] as i32,
+        nums[3],
+        nums[4],
+        nums[5],
+    );
+    Some(days_from_civil(y, m, d) * 86400 + hh * 3600 + mm * 60 + ss)
+}
+
+/// 民用历 (y,m,d) → 自 1970-01-01 起的天数（Howard Hinnant 算法）。
+fn days_from_civil(y: i32, m: i32, d: i32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y } as i64;
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let mp = if m > 2 { m - 3 } else { m + 9 } as i64;
+    let doy = (153 * mp + 2) / 5 + (d as i64 - 1);
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
 }
 
 /// 由 epoch 秒取 UTC 年份（差一天的边界对本用途可接受，不引 chrono）。
@@ -518,6 +566,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_wpd_date_string() {
+        let e = parse_date_string("2026/04/30:19:42:06.000").unwrap();
+        assert_eq!(year_of(e), 2026);
+        let expected = days_from_civil(2026, 4, 30) * 86400 + 19 * 3600 + 42 * 60 + 6;
+        assert_eq!(e, expected);
+    }
+
+    #[test]
+    fn parses_iso_like_and_rejects_short() {
+        assert!(parse_date_string("2026-04-30 19:42:06").is_some());
+        assert!(parse_date_string("not a date").is_none());
+    }
+
+    #[test]
     fn folder_name_uses_model_and_serial_tail() {
         assert_eq!(
             folder_name_for("iPhone 15 Pro", Some("F17ABC3F9A2C")),
@@ -870,6 +932,47 @@ mod tests {
                     (total as f64 / 1048576.0) / d_read.as_secs_f64().max(0.001)
                 );
             }
+        }
+    }
+
+    /// 诊断 `WPD_OBJECT_DATE_CREATED` 的真实类型与转换结果。
+    /// 跑：`cargo test -p liveporter real_device_date_probe -- --ignored --nocapture`
+    #[test]
+    #[ignore = "requires a connected iPhone"]
+    fn real_device_date_probe() {
+        let _com = ComGuard::new().unwrap();
+        let dev = WpdDevice::open_first().unwrap();
+        let media = dev.list_media().unwrap();
+        let keys = unsafe { key_collection(&[WPD_OBJECT_DATE_CREATED]) }.unwrap();
+
+        for f in media.iter().take(6) {
+            let oid = match resolve_object_id(dev.content(), &f.persistent_id) {
+                Ok(x) => x,
+                Err(e) => {
+                    println!("resolve fail {}: {e:#}", f.name);
+                    continue;
+                }
+            };
+            let wide: Vec<u16> = oid.encode_utf16().chain(std::iter::once(0)).collect();
+            let values = unsafe { dev.properties.GetValues(PCWSTR(wide.as_ptr()), &keys) }.ok();
+            let Some(values) = values else {
+                println!("{}: GetValues 失败", f.name);
+                continue;
+            };
+            let Some(pv) = (unsafe { values.GetValue(&WPD_OBJECT_DATE_CREATED) }).ok() else {
+                println!("{}: GetValue 失败", f.name);
+                continue;
+            };
+
+            // PROPVARIANT 前 2 字节是 vt (VARTYPE)
+            let vt = unsafe { *(pv.as_raw() as *const _ as *const u16) };
+            let as_f64 = f64::try_from(&pv).ok();
+            let as_bstr = BSTR::try_from(&pv).ok().map(|b| b.to_string());
+            let ours = taken_at_from_pv(&pv);
+            println!(
+                "{}: vt=0x{vt:04x} f64={as_f64:?} bstr={as_bstr:?} taken_at={ours:?}",
+                f.name
+            );
         }
     }
 }
