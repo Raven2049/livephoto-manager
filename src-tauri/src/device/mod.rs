@@ -596,4 +596,94 @@ mod tests {
         assert!(ok > 0, "至少应有一个文件成功");
         assert_eq!(wrong, 0, "不应有内容/大小不符的文件");
     }
+
+    /// 并发流实验：`LPM_PARALLEL` 个线程，各自 Open 一次设备、各下一部分文件。
+    /// 跑：`cargo test -p liveporter real_device_parallel_smoke -- --ignored --nocapture`
+    #[test]
+    #[ignore = "requires a connected iPhone"]
+    fn real_device_parallel_smoke() {
+        let n: usize = std::env::var("LPM_SMOKE_N")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20);
+        let threads: usize = std::env::var("LPM_PARALLEL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2);
+
+        // 先用一个临时会话枚举清单（清单是纯数据，可跨线程）。
+        let media = {
+            let _com = ComGuard::new().unwrap();
+            let dev = WpdDevice::open_first().unwrap();
+            dev.list_media().unwrap()
+        };
+        println!("media count = {}", media.len());
+
+        let per = n / threads;
+        let dir = std::env::temp_dir().join("lpm_device_parallel");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let start = std::time::Instant::now();
+        let handles: Vec<_> = (0..threads)
+            .map(|t| {
+                let chunk: Vec<MediaFile> = media.iter().skip(t * per).take(per).cloned().collect();
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    let _com = match ComGuard::new() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            println!("thread {t} COM 初始化失败: {e:#}");
+                            return (0u32, per as u32, 0u64);
+                        }
+                    };
+                    let dev = match WpdDevice::open_first() {
+                        Ok(d) => d,
+                        Err(e) => {
+                            println!("thread {t} Open 失败: {e:#}");
+                            return (0u32, per as u32, 0u64);
+                        }
+                    };
+                    let (mut ok, mut fail, mut bytes) = (0u32, 0u32, 0u64);
+                    for (i, f) in chunk.iter().enumerate() {
+                        let dest = dir.join(format!("t{t}_{i:03}_{}", f.name));
+                        let oid = match resolve_object_id(dev.content(), &f.persistent_id) {
+                            Ok(x) => x,
+                            Err(e) => {
+                                fail += 1;
+                                println!("t{t} RESOLVE-FAIL {}: {e:#}", f.name);
+                                continue;
+                            }
+                        };
+                        match transfer::download_object(dev.content(), &oid, &dest, |_| {}) {
+                            Ok(w) => {
+                                ok += 1;
+                                bytes += w;
+                            }
+                            Err(e) => {
+                                fail += 1;
+                                println!("t{t} FAIL {}: {e:#}", f.name);
+                            }
+                        }
+                    }
+                    println!("thread {t}: ok={ok} fail={fail} bytes={bytes}");
+                    (ok, fail, bytes)
+                })
+            })
+            .collect();
+
+        let (mut ok, mut fail, mut bytes) = (0u32, 0u32, 0u64);
+        for h in handles {
+            let (a, b, c) = h.join().unwrap();
+            ok += a;
+            fail += b;
+            bytes += c;
+        }
+        let secs = start.elapsed().as_secs_f64();
+        println!(
+            "PARALLEL threads={threads} ok={ok} fail={fail} bytes={bytes} secs={secs:.1} => {:.2} MB/s",
+            bytes as f64 / 1048576.0 / secs.max(0.001)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
