@@ -25,8 +25,10 @@ export default defineConfig(() => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri` and the cargo build output.
+      //    注意：src-tauri 是 workspace 成员，产物在仓库根的 target/，
+      //    只忽略 src-tauri/** 不够，否则 cargo 写 DLL 时 Vite 会 EBUSY。
+      ignored: ["**/src-tauri/**", "**/target/**"],
     },
   },
 }));

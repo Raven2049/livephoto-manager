@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from "vue";
+import { computed, nextTick, onMounted, onBeforeUnmount, ref } from "vue";
 import { lpmUrl } from "../lib/lpm";
 import type { ImageItem } from "../stores/library";
 
@@ -9,17 +9,26 @@ const props = defineProps<{
   gap: number;
 }>();
 
+// 1x1 透明 GIF：未加载的瓦片用它占位，避免滚动途中批量发起请求。
+const PLACEHOLDER =
+  "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+
 const scroller = ref<HTMLElement | null>(null);
 const scrollTop = ref(0);
 const viewportH = ref(0);
 const viewportW = ref(0);
+
+// 滚动停稳后才给新瓦片挂 src；已加载过的 index 永久保留，不回退成占位图。
+const settled = ref(false);
+const loaded = new Set<number>();
+let settleTimer: number | undefined;
 
 // 瓦片边长由列数与容器宽算出（固定尺寸，便于虚拟化）
 const tileW = computed(() => {
   const cols = Math.max(1, props.columns);
   return Math.floor((viewportW.value - props.gap * (cols + 1)) / cols);
 });
-const tileH = computed(() => tileW.value < 1 ? 1 : tileW.value);
+const tileH = computed(() => (tileW.value < 1 ? 1 : tileW.value));
 
 const rows = computed(() => {
   const cols = Math.max(1, props.columns);
@@ -63,8 +72,31 @@ const visible = computed<Tile[]>(() => {
   return out;
 });
 
+function markVisibleLoaded() {
+  for (const t of visible.value) loaded.add(t.index);
+}
+
+let ticking = false;
 function onScroll() {
-  scrollTop.value = scroller.value?.scrollTop ?? 0;
+  // 快速拖动滚动条时一帧可能触发多次 scroll，用 rAF 节流到一帧一次重渲染。
+  if (ticking) return;
+  ticking = true;
+  requestAnimationFrame(() => {
+    scrollTop.value = scroller.value?.scrollTop ?? 0;
+    ticking = false;
+  });
+
+  // 滚动途中只更新布局，不给新瓦片加载图片。
+  settled.value = false;
+  if (settleTimer !== undefined) clearTimeout(settleTimer);
+  settleTimer = window.setTimeout(() => {
+    markVisibleLoaded();
+    settled.value = true;
+  }, 150);
+}
+
+function tileSrc(index: number, path: string): string {
+  return settled.value || loaded.has(index) ? lpmUrl(path) : PLACEHOLDER;
 }
 
 /** 记录光标下的瓦片序号与相对行内的纵向偏移，供缩放后还原滚动位置。 */
@@ -100,8 +132,17 @@ onMounted(() => {
   ro.observe(el);
   viewportH.value = el.clientHeight;
   viewportW.value = el.clientWidth;
+
+  // 首屏：等一帧拿到尺寸后，加载当前视口。
+  nextTick(() => {
+    markVisibleLoaded();
+    settled.value = true;
+  });
 });
-onBeforeUnmount(() => ro?.disconnect());
+onBeforeUnmount(() => {
+  ro?.disconnect();
+  if (settleTimer !== undefined) clearTimeout(settleTimer);
+});
 
 defineExpose({ el: scroller, captureAnchor, restoreAnchor });
 </script>
@@ -119,7 +160,12 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
           transform: `translate(${t.x}px, ${t.y}px)`,
         }"
       >
-        <img :src="lpmUrl(t.item.path)" :alt="t.item.name" loading="lazy" />
+        <img
+          :src="tileSrc(t.index, t.item.path)"
+          :alt="t.item.name"
+          loading="lazy"
+          decoding="async"
+        />
       </div>
     </div>
   </div>
@@ -143,7 +189,6 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
   left: 0;
   overflow: hidden;
   background: #1c1c1c;
-  will-change: transform;
 }
 .tile img {
   width: 100%;

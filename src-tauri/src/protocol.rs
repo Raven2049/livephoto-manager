@@ -2,7 +2,9 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use tauri::http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE};
+use tauri::http::header::{
+    ACCEPT_RANGES, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
+};
 use tauri::http::status::StatusCode;
 use tauri::http::Response;
 
@@ -43,16 +45,46 @@ pub fn resolve_allowed(raw_path: &str, allowed_root: &Path) -> Option<PathBuf> {
     }
 }
 
+/// ETag：用「修改时间纳秒 + 文件大小」拼出来。文件一改，ETag 必变。
+fn etag_for(meta: &std::fs::Metadata) -> String {
+    let size = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("\"{mtime:x}-{size:x}\"")
+}
+
 /// 构造响应：不做 Range 时全量返回，做 Range 时返回 206。
+///
+/// 带 ETag + `Cache-Control: no-cache`：浏览器每次会带上 `If-None-Match` 来校验，
+/// 命中就回 304（不回文件内容），从而避免回划时重复读盘与解码。
 pub fn build_response(
     path: &Path,
     range_header: Option<&str>,
+    if_none_match: Option<&str>,
 ) -> std::io::Result<Response<Vec<u8>>> {
     let mut file = File::open(path)?;
-    let len = file.metadata()?.len();
+    let meta = file.metadata()?;
+    let len = meta.len();
     let mime = mime_from_path(path);
+    let etag = etag_for(&meta);
 
-    let builder = Response::builder().header(CONTENT_TYPE, mime);
+    if if_none_match == Some(etag.as_str()) {
+        return Ok(Response::builder()
+            .status(StatusCode::NOT_MODIFIED)
+            .header(ETAG, etag.as_str())
+            .header(CACHE_CONTROL, "no-cache")
+            .body(Vec::new())
+            .expect("static headers are valid"));
+    }
+
+    let builder = Response::builder()
+        .header(CONTENT_TYPE, mime)
+        .header(ETAG, etag.as_str())
+        .header(CACHE_CONTROL, "no-cache");
 
     let Some(range_header) = range_header else {
         let mut buf = Vec::with_capacity(len as usize);
@@ -135,9 +167,10 @@ mod tests {
         let f = dir.join("x.png");
         std::fs::write(&f, b"hello").unwrap();
 
-        let resp = build_response(&f, None).unwrap();
+        let resp = build_response(&f, None, None).unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(resp.body().as_slice(), b"hello");
+        assert!(resp.headers().get(ETAG).is_some());
     }
 
     #[test]
@@ -146,10 +179,31 @@ mod tests {
         let f = dir.join("y.bin");
         std::fs::write(&f, b"0123456789").unwrap();
 
-        let resp = build_response(&f, Some("bytes=2-4")).unwrap();
+        let resp = build_response(&f, Some("bytes=2-4"), None).unwrap();
         assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(resp.body().as_slice(), b"234");
         assert_eq!(resp.headers().get(CONTENT_RANGE).unwrap(), "bytes 2-4/10");
+    }
+
+    #[test]
+    fn matching_etag_returns_304_without_body() {
+        let dir = temp_dir("lpm_proto_test3");
+        let f = dir.join("z.jpg");
+        std::fs::write(&f, b"hello").unwrap();
+
+        let etag = build_response(&f, None, None)
+            .unwrap()
+            .headers()
+            .get(ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let resp = build_response(&f, None, Some(&etag)).unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+        assert!(resp.body().is_empty());
+        assert_eq!(resp.headers().get(ETAG).unwrap(), etag.as_str());
     }
 
     #[test]

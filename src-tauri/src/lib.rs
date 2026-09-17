@@ -11,8 +11,8 @@ pub fn run() {
         .manage(state::AppState::default())
         .register_asynchronous_uri_scheme_protocol("lpm", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
-            // 协议处理函数是同步的：把读盘放到独立线程，读完再 respond。
-            std::thread::spawn(move || {
+            // 协议处理函数是同步的：把读盘放到受控的阻塞线程池，读完再 respond。
+            tauri::async_runtime::spawn_blocking(move || {
                 let state = app.state::<state::AppState>();
                 let root = state.allowed_root();
                 let response = match root {
@@ -20,13 +20,21 @@ pub fn run() {
                         let raw = request.uri().path().to_string();
                         match protocol::resolve_allowed(&raw, &root) {
                             Some(path) => {
-                                let range = request
-                                    .headers()
-                                    .get(tauri::http::header::RANGE)
-                                    .and_then(|v| v.to_str().ok())
-                                    .map(|s| s.to_string());
-                                protocol::build_response(&path, range.as_deref())
-                                    .unwrap_or_else(|e| internal_error(&e.to_string()))
+                                let header = |name: tauri::http::HeaderName| {
+                                    request
+                                        .headers()
+                                        .get(name)
+                                        .and_then(|v| v.to_str().ok())
+                                        .map(|s| s.to_string())
+                                };
+                                let range = header(tauri::http::header::RANGE);
+                                let if_none_match = header(tauri::http::header::IF_NONE_MATCH);
+                                protocol::build_response(
+                                    &path,
+                                    range.as_deref(),
+                                    if_none_match.as_deref(),
+                                )
+                                .unwrap_or_else(|e| internal_error(&e.to_string()))
                             }
                             None => forbidden(),
                         }
