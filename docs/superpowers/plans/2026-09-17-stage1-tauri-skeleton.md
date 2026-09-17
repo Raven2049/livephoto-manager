@@ -150,7 +150,9 @@ Get-Content "$env:TEMP\lpm-scaffold\lpm\src-tauri\Cargo.toml"
 把 `@tauri-apps/cli`、`@tauri-apps/api`、`tauri`、`tauri-build` 的版本记在下方（后续所有依赖以这些为准）：
 
 ```
-（待填）
+（实测，2026-09-17）@tauri-apps/cli ^2、@tauri-apps/api ^2、vue ^3.5.13、vite ^8.0.16、
+typescript ~6.0.3、vue-tsc ^3.3.5；tauri 2.11.5、tauri-build 2.6.3。
+另加：tauri-plugin-dialog 2.7.3（npm ^2.7.3）、pinia ^4.0.3、http-range 0.1.5、percent-encoding 2.3.2。
 ```
 
 - [ ] **Step 3: 移植到仓库**
@@ -729,7 +731,11 @@ export function lpmUrl(absPath: string): string {
 在 `App.vue` 里临时加一行 `console.log(lpmUrl("C:\\Windows\\Web\\Wallpaper\\Windows\\img0.jpg"))`，`npm run tauri dev` 打开 DevTools 看输出，确认是 `http://lpm.localhost/...` 形态，并把结果记在下方：
 
 ```
-（待填：实际输出）
+（已查证，2026-09-17，读 tauri 2.11.5 的 scripts/core.js，无需运行时即可确定）
+Windows: http://lpm.localhost/<encodeURIComponent(绝对路径)>
+例：C:\Users\Raven\a.jpg → http://lpm.localhost/C%3A%5CUsers%5CRaven%5Ca.jpg
+协议处理函数收到的 request.uri().path() 为 /C%3A%5CUsers%5CRaven%5Ca.jpg，
+经 percent-decode 后即 C:\Users\Raven\a.jpg，与 protocol::resolve_allowed 的实现一致。
 ```
 
 - [ ] **Step 3: Pinia store（必须 shallowRef）**
