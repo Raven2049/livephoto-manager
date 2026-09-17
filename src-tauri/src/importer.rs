@@ -264,9 +264,32 @@ pub fn run_tasks(
             let (Some(f), Some(dest)) = (f, dest) else {
                 continue;
             };
-            match transfer.fetch(&f.object_id, dest) {
-                Ok(written) => progress.bytes_done += written,
+            // 先写 .part，成功后改名，避免中断留下"看似完整"的损坏文件。
+            let mut part = dest.clone().into_os_string();
+            part.push(".part");
+            let part = PathBuf::from(part);
+
+            match transfer.fetch(&f.object_id, &part) {
+                Ok(written) => {
+                    // 防御：写入字节数必须与设备报称大小一致。实测遇到过"GetStream 成功但读到 0 字节"
+                    // 的情况；不校验就会把空/损坏文件当成已导入。
+                    if written != f.size {
+                        let _ = std::fs::remove_file(&part);
+                        error = Some(format!(
+                            "{}: 大小不符（预期 {} 实得 {}）",
+                            f.name, f.size, written
+                        ));
+                        break;
+                    }
+                    if let Err(e) = std::fs::rename(&part, dest) {
+                        let _ = std::fs::remove_file(&part);
+                        error = Some(format!("{}: 改名失败: {e}", f.name));
+                        break;
+                    }
+                    progress.bytes_done += written;
+                }
                 Err(e) => {
+                    let _ = std::fs::remove_file(&part);
                     error = Some(format!("{}: {e:#}", f.name));
                     break;
                 }
@@ -393,13 +416,13 @@ mod tests {
             TransferTask {
                 base_name: "IMG_0001".into(),
                 taken_at: 1000,
-                still: Some(df("IMG_0001.JPG", 100, Some(1000))),
-                movie: Some(df("IMG_0001.MOV", 200, Some(1000))),
+                still: Some(df("IMG_0001.JPG", 4, Some(1000))),
+                movie: Some(df("IMG_0001.MOV", 4, Some(1000))),
             },
             TransferTask {
                 base_name: "IMG_0002".into(),
                 taken_at: 2000,
-                still: Some(df("IMG_0002.JPG", 50, Some(2000))),
+                still: Some(df("IMG_0002.JPG", 4, Some(2000))),
                 movie: None,
             },
         ];
