@@ -15,6 +15,7 @@ use crate::pairing::{
 
 pub const STATUS_PENDING: i64 = 0;
 pub const STATUS_COPIED: i64 = 1;
+pub const STATUS_TRANSCODED: i64 = 2;
 pub const STATUS_FAILED: i64 = 4;
 
 // ---------------------------------------------------------------------------
@@ -143,6 +144,12 @@ pub trait Transfer {
     fn fetch(&mut self, object_id: &str, dest: &Path) -> anyhow::Result<u64>;
 }
 
+/// 缩略图生成的抽象：真实实现调 ffmpeg，测试用假的。
+/// 由实现按扩展名自行决定取静态图还是视频首帧。
+pub trait Thumbs {
+    fn make(&mut self, source: &Path, thumbs_dir: &Path) -> anyhow::Result<PathBuf>;
+}
+
 /// 导入进度（同时用于 Tauri 事件 payload）。
 #[derive(Debug, Clone, Default, serde::Serialize, PartialEq, Eq)]
 pub struct ImportProgress {
@@ -160,10 +167,12 @@ pub struct ImportProgress {
 pub fn run_tasks(
     tasks: &[TransferTask],
     originals: &Path,
+    thumbs_dir: &Path,
     device_folder: &str,
     device_id: i64,
     conn: &Connection,
     transfer: &mut dyn Transfer,
+    thumbs: &mut dyn Thumbs,
     mut on_progress: impl FnMut(&ImportProgress),
 ) -> anyhow::Result<ImportProgress> {
     let total = tasks.len();
@@ -306,6 +315,40 @@ pub fn run_tasks(
                     STATUS_COPIED,
                     None,
                 )?;
+
+                // 缩略图：失败不把条目判为失败（文件已完好），只保留 copied 并记录原因。
+                let source = still_dest.as_ref().or(movie_dest.as_ref());
+                if let Some(src) = source {
+                    match thumbs.make(src, thumbs_dir) {
+                        Ok(tp) => {
+                            crate::db::set_thumb_path(
+                                conn,
+                                device_id,
+                                &task.base_name,
+                                task.taken_at,
+                                &tp.to_string_lossy(),
+                            )?;
+                            crate::db::set_asset_status(
+                                conn,
+                                device_id,
+                                &task.base_name,
+                                task.taken_at,
+                                STATUS_TRANSCODED,
+                                None,
+                            )?;
+                        }
+                        Err(e) => {
+                            crate::db::set_asset_status(
+                                conn,
+                                device_id,
+                                &task.base_name,
+                                task.taken_at,
+                                STATUS_COPIED,
+                                Some(&format!("缩略图失败: {e:#}")),
+                            )?;
+                        }
+                    }
+                }
                 progress.done += 1;
             }
             Some(err) => {
@@ -403,6 +446,22 @@ mod tests {
         }
     }
 
+    struct FakeThumbs {
+        fail: bool,
+    }
+
+    impl Thumbs for FakeThumbs {
+        fn make(&mut self, _source: &Path, thumbs_dir: &Path) -> anyhow::Result<PathBuf> {
+            if self.fail {
+                anyhow::bail!("模拟缩略图失败");
+            }
+            std::fs::create_dir_all(thumbs_dir).unwrap();
+            let p = thumbs_dir.join("fake.webp");
+            std::fs::write(&p, b"x").unwrap();
+            Ok(p)
+        }
+    }
+
     #[test]
     fn run_tasks_marks_status_and_survives_failure() {
         let conn = db::open_in_memory().unwrap();
@@ -431,8 +490,20 @@ mod tests {
             calls: RefCell::new(Vec::new()),
             fail_on: Some("IMG_0002.JPG".into()),
         };
+        let mut thumbs = FakeThumbs { fail: false };
 
-        let p = run_tasks(&tasks, &root, "d", dev, &conn, &mut fake, |_| {}).unwrap();
+        let p = run_tasks(
+            &tasks,
+            &root,
+            &root.join("thumbs"),
+            "d",
+            dev,
+            &conn,
+            &mut fake,
+            &mut thumbs,
+            |_| {},
+        )
+        .unwrap();
         assert_eq!(p.total, 2);
         assert_eq!(p.done, 1);
         assert_eq!(p.failed, 1);
@@ -449,7 +520,8 @@ mod tests {
         assert_eq!(
             statuses,
             vec![
-                ("IMG_0001".to_string(), STATUS_COPIED),
+                // 缩略图成功后推进到 transcoded
+                ("IMG_0001".to_string(), STATUS_TRANSCODED),
                 ("IMG_0002".to_string(), STATUS_FAILED)
             ]
         );
@@ -463,5 +535,49 @@ mod tests {
             )
             .unwrap();
         assert!(err.unwrap().contains("模拟失败"));
+    }
+
+    #[test]
+    fn thumbnail_failure_keeps_copied_status() {
+        let conn = db::open_in_memory().unwrap();
+        let dev = db::upsert_device(&conn, "SN1", "m", None, "d").unwrap();
+
+        let root = std::env::temp_dir().join("lpm_thumb_fail_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let tasks = vec![TransferTask {
+            base_name: "IMG_0009".into(),
+            taken_at: 1000,
+            still: Some(df("IMG_0009.JPG", 4, Some(1000))),
+            movie: None,
+        }];
+
+        let mut fake = FakeTransfer {
+            calls: RefCell::new(Vec::new()),
+            fail_on: None,
+        };
+        let mut thumbs = FakeThumbs { fail: true };
+
+        run_tasks(
+            &tasks,
+            &root,
+            &root.join("thumbs"),
+            "d",
+            dev,
+            &conn,
+            &mut fake,
+            &mut thumbs,
+            |_| {},
+        )
+        .unwrap();
+
+        let (status, err): (i64, Option<String>) = conn
+            .query_row("SELECT status, error FROM asset", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(status, STATUS_COPIED, "缩略图失败不应把条目判为导入失败");
+        assert!(err.unwrap().contains("缩略图失败"));
     }
 }

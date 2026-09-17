@@ -194,6 +194,22 @@ pub fn set_asset_status(
     Ok(())
 }
 
+/// 写入缩略图路径。
+pub fn set_thumb_path(
+    conn: &Connection,
+    device_id: i64,
+    base_name: &str,
+    taken_at: i64,
+    thumb_path: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE asset SET thumb_path=?1, updated_at=?2
+         WHERE device_id=?3 AND base_name=?4 AND taken_at=?5",
+        params![thumb_path, now_epoch(), device_id, base_name, taken_at],
+    )?;
+    Ok(())
+}
+
 /// 已「完成」条目的大小映射：`(base_name, taken_at) -> (still_size, movie_size)`。
 pub type ExistingSizes = std::collections::HashMap<(String, i64), (Option<u64>, Option<u64>)>;
 
@@ -217,6 +233,34 @@ pub fn existing_sizes(conn: &Connection) -> rusqlite::Result<ExistingSizes> {
     rows.collect()
 }
 
+#[derive(Debug, Clone)]
+pub struct ThumbJob {
+    pub device_id: i64,
+    pub base_name: String,
+    pub taken_at: i64,
+    pub source_path: String,
+}
+
+/// 列出「缺少缩略图」的条目（文件存在、有源路径）。
+pub fn assets_missing_thumbs(conn: &Connection) -> rusqlite::Result<Vec<ThumbJob>> {
+    let mut stmt = conn.prepare(
+        "SELECT device_id, base_name, taken_at, coalesce(still_path, movie_path)
+         FROM asset
+         WHERE missing = 0
+           AND (thumb_path IS NULL OR thumb_path = '')
+           AND (still_path IS NOT NULL OR movie_path IS NOT NULL)",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(ThumbJob {
+            device_id: r.get(0)?,
+            base_name: r.get(1)?,
+            taken_at: r.get(2)?,
+            source_path: r.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AssetRow {
     pub id: i64,
@@ -225,12 +269,13 @@ pub struct AssetRow {
     pub base_name: String,
     pub still_path: Option<String>,
     pub movie_path: Option<String>,
+    pub thumb_path: Option<String>,
     pub missing: bool,
 }
 
 pub fn page_assets(conn: &Connection, offset: i64, limit: i64) -> rusqlite::Result<Vec<AssetRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, kind, integrity, base_name, still_path, movie_path, missing
+        "SELECT id, kind, integrity, base_name, still_path, movie_path, thumb_path, missing
          FROM asset
          ORDER BY base_name
          LIMIT ?1 OFFSET ?2",
@@ -243,7 +288,8 @@ pub fn page_assets(conn: &Connection, offset: i64, limit: i64) -> rusqlite::Resu
             base_name: r.get(3)?,
             still_path: r.get(4)?,
             movie_path: r.get(5)?,
-            missing: r.get::<_, i64>(6)? != 0,
+            thumb_path: r.get(6)?,
+            missing: r.get::<_, i64>(7)? != 0,
         })
     })?;
     rows.collect()

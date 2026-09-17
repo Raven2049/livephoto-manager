@@ -4,7 +4,7 @@ use tauri::Emitter;
 
 use crate::device::transfer::download_object;
 use crate::device::WpdDevice;
-use crate::importer::{self, DeviceFile, ImportProgress, Transfer};
+use crate::importer::{self, DeviceFile, ImportProgress, Thumbs, Transfer};
 use crate::library::Library;
 use crate::state::AppState;
 
@@ -59,6 +59,22 @@ impl Transfer for WpdTransfer<'_> {
     }
 }
 
+/// 走 ffmpeg 的缩略图实现。按扩展名决定取静态图还是视频首帧。
+struct FfmpegThumbs {
+    bin: std::path::PathBuf,
+}
+
+impl Thumbs for FfmpegThumbs {
+    fn make(&mut self, source: &Path, thumbs_dir: &Path) -> anyhow::Result<std::path::PathBuf> {
+        let lower = source.to_string_lossy().to_ascii_lowercase();
+        if lower.ends_with(".mov") || lower.ends_with(".mp4") || lower.ends_with(".m4v") {
+            crate::thumb::make_thumb_for_movie(&self.bin, source, thumbs_dir)
+        } else {
+            crate::thumb::make_thumb_for_still(&self.bin, source, thumbs_dir)
+        }
+    }
+}
+
 /// 从 iPhone 增量导入到当前库。
 ///
 /// WPD 调用全部放在一个 `spawn_blocking` 的专用线程上（该线程内初始化 STA），
@@ -109,15 +125,20 @@ pub async fn import_from_device(
         let mut transfer = WpdTransfer {
             content: device.content(),
         };
+        let mut thumbs = FfmpegThumbs {
+            bin: crate::ffmpeg::find_ffmpeg()?,
+        };
         let emit_target = app.clone();
         let started = std::time::Instant::now();
         let progress = importer::run_tasks(
             &tasks,
             &lib.originals_dir(),
+            &lib.thumbs_dir(),
             &info.folder_name,
             device_id,
             &conn,
             &mut transfer,
+            &mut thumbs,
             |p| {
                 if std::env::var_os("LIVEPORTER_IMPORT_LOG").is_some() {
                     let mb = p.bytes_done as f64 / (1024.0 * 1024.0);
@@ -139,6 +160,79 @@ pub async fn import_from_device(
         )?;
 
         Ok(progress)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ThumbSummary {
+    pub total: usize,
+    pub done: usize,
+    pub failed: usize,
+}
+
+/// 为当前库里「缺少缩略图」的条目补生成缩略图（回填已有库）。
+#[tauri::command]
+pub async fn generate_thumbs(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<ThumbSummary, String> {
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<ThumbSummary> {
+        let lib = Library::open(&root)?;
+        let conn = crate::db::open(&lib.db_path())?;
+        let mut thumbs = FfmpegThumbs {
+            bin: crate::ffmpeg::find_ffmpeg()?,
+        };
+
+        let jobs = crate::db::assets_missing_thumbs(&conn)?;
+        let total = jobs.len();
+        let (mut done, mut failed) = (0usize, 0usize);
+
+        for job in &jobs {
+            let src = std::path::PathBuf::from(&job.source_path);
+            match thumbs.make(&src, &lib.thumbs_dir()) {
+                Ok(tp) => {
+                    crate::db::set_thumb_path(
+                        &conn,
+                        job.device_id,
+                        &job.base_name,
+                        job.taken_at,
+                        &tp.to_string_lossy(),
+                    )?;
+                    crate::db::set_asset_status(
+                        &conn,
+                        job.device_id,
+                        &job.base_name,
+                        job.taken_at,
+                        importer::STATUS_TRANSCODED,
+                        None,
+                    )?;
+                    done += 1;
+                }
+                Err(e) => {
+                    failed += 1;
+                    eprintln!("缩略图失败 {}: {e:#}", job.base_name);
+                }
+            }
+            let _ = app.emit(
+                "thumbs://progress",
+                ThumbSummary {
+                    total,
+                    done,
+                    failed,
+                },
+            );
+        }
+
+        Ok(ThumbSummary {
+            total,
+            done,
+            failed,
+        })
     })
     .await
     .map_err(|e| e.to_string())?

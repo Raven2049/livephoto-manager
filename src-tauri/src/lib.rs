@@ -58,6 +58,7 @@ pub fn run() {
             commands::library_stats,
             commands::list_assets,
             commands::import_from_device,
+            commands::generate_thumbs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
