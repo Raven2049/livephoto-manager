@@ -1,5 +1,9 @@
+mod commands;
+mod db;
+mod indexer;
+mod library;
+mod pairing;
 mod protocol;
-mod scanner;
 mod state;
 
 use tauri::Manager;
@@ -14,7 +18,7 @@ pub fn run() {
             // 协议处理函数是同步的：把读盘放到受控的阻塞线程池，读完再 respond。
             tauri::async_runtime::spawn_blocking(move || {
                 let state = app.state::<state::AppState>();
-                let root = state.allowed_root();
+                let root = state.library_root();
                 let response = match root {
                     Some(root) => {
                         let raw = request.uri().path().to_string();
@@ -44,7 +48,12 @@ pub fn run() {
                 responder.respond(response);
             });
         })
-        .invoke_handler(tauri::generate_handler![scanner::scan_dir])
+        .invoke_handler(tauri::generate_handler![
+            commands::open_library,
+            commands::scan_library,
+            commands::library_stats,
+            commands::list_assets,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
