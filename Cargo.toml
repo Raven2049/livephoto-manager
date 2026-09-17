@@ -5,9 +5,9 @@ members = ["crates/probe", "src-tauri"]
 [workspace.package]
 edition = "2021"
 version = "0.1.0"
-# license 待定（设计文档附录 A 决策 6）。定下来之前先不填，
-# 填错会让 `cargo publish` 等工具产生错误的元数据。
-# license = ""
+# 许可证已定：GPL-3.0-or-later（设计文档附录 A 决策 6）。
+# 原因：预览片需要 H.264 编码，而 ffmpeg 的 libx264 是 GPL；项目捆绑 GPL 版 ffmpeg。
+license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
 anyhow = "1"

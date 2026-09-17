@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "LivePorter - iPhone Live Photos manager for Windows"
 authors = ["Raven2049"]
 edition = "2021"
+license.workspace = true
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary

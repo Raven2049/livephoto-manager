@@ -2,7 +2,7 @@
 name = "probe"
 edition.workspace = true
 version.workspace = true
-# license 待定，见 workspace 根说明
+license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
