@@ -21,7 +21,8 @@
 | 索引实测 | `docs/superpowers/notes/2026-09-17-index-smoke.md` | 阶段 2 索引冒烟实测 |
 | 计划 4 | `docs/superpowers/plans/2026-09-17-stage3-device-import.md` | 阶段 3：设备导入（WPD 传输 + 状态机 + 断点续传）（**已完成，带已知残留**） |
 | 导入实测 | `docs/superpowers/notes/2026-09-17-import-smoke.md` | 阶段 3 实机导入实测（含一个严重 bug 的发现与修复） |
-| 计划 5+ | 尚未编写 | ffmpeg 缩略图/预览片；UUID 校验与诊断报告；iCloud 检测；浏览体验与 UI |
+| 计划 5 | `docs/superpowers/plans/2026-09-17-stage4-thumbnails.md` | 阶段 4：ffmpeg 集成 + 缩略图（**尚未实施**） |
+| 计划 6+ | 尚未编写 | 预览片 + 悬停播放；UUID 校验 + 异常分类 + 诊断 + iCloud 检测；浏览体验与 UI；打包分发 |
 
 ## 当前进度
 
@@ -34,7 +35,7 @@
 - [x] **计划 4（阶段 3 设备导入）编写并实现完成**：`liveporter` 30 个单元测试全绿；实机 60/60 文件传输成功、字节数校验零错位
 - [ ] 计划 5+ 尚未编写
 
-**下一步：编写计划 5（ffmpeg 缩略图/预览片 + ContentIdentifier 校验 + 异常分类 + 诊断报告）。**对应设计文档 §13 第 5、6 步。
+**下一步：计划 5（阶段 4：ffmpeg 集成 + 缩略图）已写好，等待过审。**过审后从 Task 0 开始。这一步解决 HEIC 在 WebView2 里破图的问题；**只做缩略图，不做预览片**。
 
 **计划 4 遗留（动手前必读 `notes/2026-09-17-import-smoke.md`）：**
 - **iPhone 必须设为「保留原件」**：设置 → 照片 → 「传输到 Mac 或 PC」= **保留原件（Keep Originals）**。若设为「自动」，iOS 会即席把 HEIC 转 JPG、处理视频，导致传输慢约 17 倍（1.65 → 28.6 MB/s）且格式被转码。**产品应检测并提示**（信号：设备上静态图全是 `.JPG`、无 `.HEIC`）。改完需**拔插重连**才生效。
