@@ -106,6 +106,7 @@ pub async fn import_from_device(
             content: device.content(),
         };
         let emit_target = app.clone();
+        let started = std::time::Instant::now();
         let progress = importer::run_tasks(
             &tasks,
             &lib.originals_dir(),
@@ -114,6 +115,21 @@ pub async fn import_from_device(
             &conn,
             &mut transfer,
             |p| {
+                if std::env::var_os("LIVEPORTER_IMPORT_LOG").is_some() {
+                    let mb = p.bytes_done as f64 / (1024.0 * 1024.0);
+                    let secs = started.elapsed().as_secs_f64().max(0.001);
+                    eprintln!(
+                        "[import] t={:.1}s {}/{} bytes={}/{} ({:.2} MB/s) current={} failed={}",
+                        secs,
+                        p.done,
+                        p.total,
+                        p.bytes_done,
+                        p.bytes_total,
+                        mb / secs,
+                        p.current,
+                        p.failed
+                    );
+                }
                 let _ = emit_target.emit("import://progress", p);
             },
         )?;

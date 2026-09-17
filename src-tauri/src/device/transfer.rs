@@ -25,26 +25,43 @@ pub fn download_object(
 
     let resources = unsafe { content.Transfer() }.context("获取 Transfer 接口失败")?;
 
-    let mut buf_size: u32 = 0;
-    let mut stream: Option<IStream> = None;
-    unsafe {
-        resources
-            .GetStream(
+    // iOS 的 PTP 会话在上一个流完全释放前，新的 GetStream 会间歇失败（实测 MOV 尤其明显，
+    // 错误 0x80042007）。带退避重试若干次可以显著降低失败率。
+    const MAX_ATTEMPTS: u32 = 5;
+    let mut attempt = 0u32;
+    let (stream, buf_size) = loop {
+        attempt += 1;
+        let mut buf_size: u32 = 0;
+        let mut stream: Option<IStream> = None;
+        let result = unsafe {
+            resources.GetStream(
                 PCWSTR(wide.as_ptr()),
                 &WPD_RESOURCE_DEFAULT,
                 STGM_READ.0,
                 &mut buf_size,
                 &mut stream,
             )
-            .context("GetStream 失败")?;
-    }
-    let stream = stream.context("设备未返回数据流")?;
+        };
+        match result {
+            Ok(()) => match stream {
+                Some(s) => break (s, buf_size),
+                None => {
+                    if attempt >= MAX_ATTEMPTS {
+                        bail!("设备未返回数据流");
+                    }
+                }
+            },
+            Err(e) => {
+                if attempt >= MAX_ATTEMPTS {
+                    return Err(e).context("GetStream 失败");
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150 * attempt as u64));
+    };
 
     // 设备建议值优先，夹在 [64 KiB, 1 MiB] 之间，避免过小或过大。
-    if buf_size < 64 * 1024 {
-        buf_size = 64 * 1024;
-    }
-    let chunk = buf_size.min(1024 * 1024) as usize;
+    let chunk = buf_size.clamp(64 * 1024, 1024 * 1024) as usize;
 
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
@@ -75,8 +92,8 @@ pub fn download_object(
     }
     writer.flush()?;
 
-    unsafe {
-        let _ = resources.Cancel();
-    }
+    // 注意：这里**不要**调用 `resources.Cancel()`。实测（阶段 3 Task 8）在每次成功读取后
+    // 调 Cancel 会让后续 GetStream 大量失败（iOS 返回 0x80042007）。Cancel 只应用于
+    // 真正的用户取消场景。详见 docs/superpowers/notes/2026-09-17-import-smoke.md。
     Ok(total)
 }
