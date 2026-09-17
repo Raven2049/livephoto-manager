@@ -23,7 +23,7 @@
 | 导入实测 | `docs/superpowers/notes/2026-09-17-import-smoke.md` | 阶段 3 实机导入实测（含一个严重 bug 的发现与修复） |
 | 计划 5 | `docs/superpowers/plans/2026-09-17-stage4-thumbnails.md` | 阶段 4：ffmpeg 集成 + 缩略图（8 个任务，**已完成**） |
 | 缩略图实测 | `docs/superpowers/notes/2026-09-17-thumbs-smoke.md` | 阶段 4 缩略图实测（含 `VT_DATE` 与 `-filter_complex` 两个修复） |
-| 计划 6 | `docs/superpowers/plans/2026-09-18-stage5-previews.md` | 阶段 5：预览片 + 悬停播放（**尚未实施**） |
+| 计划 6 | `docs/superpowers/plans/2026-09-18-stage5-previews.md` | 阶段 5：预览片 + 悬停播放（**后端已实现，前端待做**，见「进行中」） |
 | 计划 7+ | 尚未编写 | UUID 校验 + 异常分类 + 诊断 + iCloud 检测；浏览体验与 UI；打包分发 |
 
 ## 当前进度
@@ -38,7 +38,36 @@
 - [x] **计划 5（阶段 4 ffmpeg 集成 + 缩略图）编写并实现完成**：HEIC→512px WebP、导入时生成、状态推进到 `transcoded`、网格显示缩略图（已用户确认）；顺带修复 `taken_at`（`VT_DATE` 解析）
 - [ ] 计划 6+ 尚未编写
 
-**下一步：计划 6（阶段 5：预览片 + 悬停播放）已写好，等待过审。**过审后从 Task 0 开始。两个待确认的取舍见计划文末「已知风险与取舍」（预览片默认截前 6 秒；限流放在前端）。
+**下一步：计划 6（阶段 5：预览片 + 悬停播放）——后端已实现，前端未做，见下方「进行中」。**
+
+## 进行中：计划 6（阶段 5）——后端完成，前端待做
+
+文档：`docs/superpowers/plans/2026-09-18-stage5-previews.md`。两个取舍已定并写入设计 §7.1/§7.3：
+预览片**截前 6 秒**；并发限流（最多 2）**放在前端**。
+
+**已完成（后端）**：
+- `ffmpeg::preview_args()`（480p H.264、`-an`、`-t 6`、`faststart`、`-filter_complex`）+ 单测
+- `thumb::preview_file_name()` / `make_preview_for_movie()`（内容哈希命名、已存在复用）+ 单测
+- `db::asset_movie_path()` / `set_preview_path()` + 单测
+- `commands::ensure_preview(asset_id)` 并已注册
+- 设计文档 §7.1/§7.3 已记录上述两个取舍
+- 验证：`cargo test -p liveporter` 41 通过、clippy 干净、fmt 干净
+
+**未完成（接着做）**：
+1. **跑真 ffmpeg 冒烟**（未跑过）：
+   ```powershell
+   $env:LIVEPORTER_FFMPEG = "<ffmpeg.exe 路径，见本文件 ffmpeg 说明>"
+   $env:LPM_PREVIEW_INPUT  = "<某个 .MOV>"
+   cargo test -p liveporter real_preview_smoke -- --ignored --nocapture
+   ```
+2. **前端 Task 4**（核心工作量）：`src/composables/usePreview.ts`（单例 `<video>`、350ms 防抖、
+   滚动/缩放期间与结束后 300ms 抑制、最多 2 个在飞）；`PhotoGrid.vue` 瓦片 hover 回调并回传
+   `rect`；`App.vue` 挂**唯一一个** `<video>` 并定位到目标瓦片。计划文档 Task 4 有完整代码骨架。
+3. **Task 5 实测**：悬停 ≥350ms 播放；快速划过不触发；滚动/缩放不触发；DevTools 确认
+   **只有一个 `<video>`**；`previews/` 出现 `<hash>.mp4`。
+4. **Task 6 收尾验证** 与 `notes/2026-09-18-preview-smoke.md`。
+
+**注意**：`previews/` 与 `thumbs/` 都在库内、走 `lpm://`（库根已作为允许根）；不要给瓦片各放 `<video>`。
 
 **计划 4 遗留（动手前必读 `notes/2026-09-17-import-smoke.md`）：**
 - **iPhone 必须设为「保留原件」**：设置 → 照片 → 「传输到 Mac 或 PC」= **保留原件（Keep Originals）**。若设为「自动」，iOS 会即席把 HEIC 转 JPG、处理视频，导致传输慢约 17 倍（1.65 → 28.6 MB/s）且格式被转码。**产品应检测并提示**（信号：设备上静态图全是 `.JPG`、无 `.HEIC`）。改完需**拔插重连**才生效。
