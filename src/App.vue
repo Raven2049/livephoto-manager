@@ -60,6 +60,7 @@ onBeforeUnmount(() => {
       <button :disabled="!lib.root || imp.running" @click="importFromDevice">
         从 iPhone 导入
       </button>
+      <button v-if="imp.running" @click="imp.stop">停止</button>
       <span v-if="imp.running" class="prog">
         导入中 {{ imp.progress?.done ?? 0 }}/{{ imp.progress?.total ?? "?" }}
         · {{ imp.progress?.current }} · {{ imp.progress?.bytes_done ?? 0 }} 字节

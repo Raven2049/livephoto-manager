@@ -10,6 +10,7 @@ export interface ImportProgress {
   current: string;
   bytes_done: number;
   bytes_total: number;
+  cancelled: boolean;
 }
 
 export const useImport = defineStore("import", () => {
@@ -34,5 +35,10 @@ export const useImport = defineStore("import", () => {
     }
   }
 
-  return { running, progress, error, start };
+  /** 请求停止当前导入（后端在文件之间检查）。 */
+  async function stop() {
+    await invoke("cancel_import");
+  }
+
+  return { running, progress, error, start, stop };
 });

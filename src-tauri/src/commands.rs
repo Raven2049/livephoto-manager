@@ -85,6 +85,8 @@ pub async fn import_from_device(
     state: tauri::State<'_, AppState>,
 ) -> Result<ImportProgress, String> {
     let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+    state.reset_cancel();
+    let cancel = state.cancel_flag();
 
     tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<ImportProgress> {
         let _com = crate::device::ComGuard::new()?;
@@ -128,6 +130,7 @@ pub async fn import_from_device(
         let mut thumbs = FfmpegThumbs {
             bin: crate::ffmpeg::find_ffmpeg()?,
         };
+        let should_cancel = || cancel.load(std::sync::atomic::Ordering::SeqCst);
         let emit_target = app.clone();
         let started = std::time::Instant::now();
         let progress = importer::run_tasks(
@@ -139,6 +142,7 @@ pub async fn import_from_device(
             &conn,
             &mut transfer,
             &mut thumbs,
+            &should_cancel,
             |p| {
                 if std::env::var_os("LIVEPORTER_IMPORT_LOG").is_some() {
                     let mb = p.bytes_done as f64 / (1024.0 * 1024.0);
@@ -173,6 +177,8 @@ pub async fn generate_thumbs(
     state: tauri::State<'_, AppState>,
 ) -> Result<importer::ThumbSummary, String> {
     let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+    state.reset_cancel();
+    let cancel = state.cancel_flag();
 
     tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<importer::ThumbSummary> {
         let lib = Library::open(&root)?;
@@ -180,11 +186,18 @@ pub async fn generate_thumbs(
         let mut thumbs = FfmpegThumbs {
             bin: crate::ffmpeg::find_ffmpeg()?,
         };
-        importer::backfill_thumbs(&lib, &conn, &mut thumbs, |s| {
+        let should_cancel = || cancel.load(std::sync::atomic::Ordering::SeqCst);
+        importer::backfill_thumbs(&lib, &conn, &mut thumbs, &should_cancel, |s| {
             let _ = app.emit("thumbs://progress", s);
         })
     })
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| format!("{e:#}"))
+}
+
+/// 请求停止当前的导入 / 缩略图回填。
+#[tauri::command]
+pub fn cancel_import(state: tauri::State<'_, AppState>) {
+    state.request_cancel();
 }

@@ -164,6 +164,7 @@ pub fn backfill_thumbs(
     lib: &crate::library::Library,
     conn: &Connection,
     thumbs: &mut dyn Thumbs,
+    should_cancel: &dyn Fn() -> bool,
     mut on_progress: impl FnMut(&ThumbSummary),
 ) -> anyhow::Result<ThumbSummary> {
     let jobs = crate::db::assets_missing_thumbs(conn)?;
@@ -174,6 +175,9 @@ pub fn backfill_thumbs(
     };
 
     for job in &jobs {
+        if should_cancel() {
+            break;
+        }
         let src = PathBuf::from(&job.source_path);
         match thumbs.make(&src, &lib.thumbs_dir()) {
             Ok(tp) => {
@@ -214,6 +218,7 @@ pub struct ImportProgress {
     pub current: String,
     pub bytes_done: u64,
     pub bytes_total: u64,
+    pub cancelled: bool,
 }
 
 /// 执行一批任务。每个条目独立：失败的标 `failed` 并保留 `error`，不阻断其余。
@@ -228,6 +233,7 @@ pub fn run_tasks(
     conn: &Connection,
     transfer: &mut dyn Transfer,
     thumbs: &mut dyn Thumbs,
+    should_cancel: &dyn Fn() -> bool,
     mut on_progress: impl FnMut(&ImportProgress),
 ) -> anyhow::Result<ImportProgress> {
     let total = tasks.len();
@@ -245,6 +251,10 @@ pub fn run_tasks(
     };
 
     for task in tasks {
+        if should_cancel() {
+            progress.cancelled = true;
+            break;
+        }
         progress.current = task.base_name.clone();
 
         let year = if task.taken_at > 0 {
@@ -556,6 +566,7 @@ mod tests {
             &conn,
             &mut fake,
             &mut thumbs,
+            &|| false,
             |_| {},
         )
         .unwrap();
@@ -623,6 +634,7 @@ mod tests {
             &conn,
             &mut fake,
             &mut thumbs,
+            &|| false,
             |_| {},
         )
         .unwrap();
@@ -668,7 +680,7 @@ mod tests {
         db::set_asset_status(&conn, dev, "IMG_1", 0, STATUS_COPIED, None).unwrap();
 
         let mut thumbs = FakeThumbs { fail: false };
-        let s = backfill_thumbs(&lib, &conn, &mut thumbs, |_| {}).unwrap();
+        let s = backfill_thumbs(&lib, &conn, &mut thumbs, &|| false, |_| {}).unwrap();
         assert_eq!(s.total, 1);
         assert_eq!(s.done, 1);
 
@@ -681,7 +693,7 @@ mod tests {
         assert_eq!(status, STATUS_TRANSCODED);
 
         // 第二次没有可回填的条目
-        let s2 = backfill_thumbs(&lib, &conn, &mut thumbs, |_| {}).unwrap();
+        let s2 = backfill_thumbs(&lib, &conn, &mut thumbs, &|| false, |_| {}).unwrap();
         assert_eq!(s2.total, 0);
     }
 }
