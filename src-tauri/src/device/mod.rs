@@ -686,4 +686,190 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// 分阶段计时：定位低速/停滞到底花在哪。
+    /// 跑：`cargo test -p liveporter real_device_timing_smoke -- --ignored --nocapture`
+    #[test]
+    #[ignore = "requires a connected iPhone"]
+    fn real_device_timing_smoke() {
+        use std::time::{Duration, Instant};
+        use windows::Win32::Devices::PortableDevices::WPD_RESOURCE_DEFAULT;
+        use windows::Win32::System::Com::{IStream, STGM_READ};
+
+        let _com = ComGuard::new().unwrap();
+        let dev = WpdDevice::open_first().unwrap();
+        let media = dev.list_media().unwrap();
+        let n: usize = std::env::var("LPM_SMOKE_N")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20);
+        println!("media count = {}", media.len());
+
+        let (mut bytes_total, mut time_total) = (0u64, 0f32);
+        for (i, f) in media.iter().take(n).enumerate() {
+            let t_resolve = Instant::now();
+            let oid = match resolve_object_id(dev.content(), &f.persistent_id) {
+                Ok(x) => x,
+                Err(e) => {
+                    println!("[{i:02}] RESOLVE-FAIL {}: {e:#}", f.name);
+                    continue;
+                }
+            };
+            let d_resolve = t_resolve.elapsed();
+
+            let wide: Vec<u16> = oid.encode_utf16().chain(std::iter::once(0)).collect();
+            let resources = unsafe { dev.content().Transfer().unwrap() };
+            let mut stream: Option<IStream> = None;
+            let mut buf_size: u32 = 0;
+            let mut d_get = Duration::ZERO;
+            let mut attempts = 0u32;
+            let mut got = false;
+            for a in 1..=5u32 {
+                let t = Instant::now();
+                let r = unsafe {
+                    resources.GetStream(
+                        PCWSTR(wide.as_ptr()),
+                        &WPD_RESOURCE_DEFAULT,
+                        STGM_READ.0,
+                        &mut buf_size,
+                        &mut stream,
+                    )
+                };
+                d_get += t.elapsed();
+                attempts = a;
+                if r.is_ok() && stream.is_some() {
+                    got = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(150 * a as u64));
+            }
+            if !got {
+                println!("[{i:02}] GETSTREAM-FAIL {:40}", f.name);
+                continue;
+            }
+            let stream = stream.unwrap();
+            let chunk = buf_size.clamp(64 * 1024, 1024 * 1024) as usize;
+            let t_read = Instant::now();
+            let mut buf = vec![0u8; chunk];
+            let mut total = 0u64;
+            loop {
+                let mut rd = 0u32;
+                let hr = unsafe {
+                    stream.Read(
+                        buf.as_mut_ptr() as *mut core::ffi::c_void,
+                        chunk as u32,
+                        Some(&mut rd),
+                    )
+                };
+                // 已知大小：读够 f.size 就停，避免最后那次可能阻塞的 Read。
+                if hr.is_err() || rd == 0 || total >= f.size {
+                    break;
+                }
+                total += rd as u64;
+            }
+            let d_read = t_read.elapsed();
+            drop(stream);
+            drop(resources);
+            std::thread::sleep(Duration::from_millis(250));
+
+            let d_all = d_resolve + d_get + d_read;
+            println!(
+                "[{i:02}] {:40} sz={:>9} got={:>9} buf={:>7} resolve={:>6.0}ms get={:>5.2}s(read={} ) read={:>5.2}s total={:>5.2}s {:.2}MB/s",
+                f.name,
+                f.size,
+                total,
+                buf_size,
+                d_resolve.as_secs_f32() * 1000.0,
+                d_get.as_secs_f32(),
+                attempts,
+                d_read.as_secs_f32(),
+                d_all.as_secs_f32(),
+                (total as f64 / 1048576.0) / d_all.as_secs_f64().max(0.001)
+            );
+            bytes_total += total;
+            time_total += d_all.as_secs_f32();
+        }
+        println!(
+            "TIMING SUMMARY bytes={bytes_total} time={time_total:.1}s => {:.2} MB/s",
+            (bytes_total as f64 / 1048576.0) / time_total.max(0.001) as f64
+        );
+    }
+
+    /// 同一个文件连下两次，看第二次是否变快（区分缓存/取回 vs 设备固有慢）。
+    #[test]
+    #[ignore = "requires a connected iPhone"]
+    fn real_device_repeat_smoke() {
+        use std::time::{Duration, Instant};
+        use windows::Win32::Devices::PortableDevices::WPD_RESOURCE_DEFAULT;
+        use windows::Win32::System::Com::{IStream, STGM_READ};
+
+        let _com = ComGuard::new().unwrap();
+        let dev = WpdDevice::open_first().unwrap();
+        let media = dev.list_media().unwrap();
+
+        let movs: Vec<&MediaFile> = media
+            .iter()
+            .filter(|f| f.name.to_ascii_lowercase().ends_with(".mov"))
+            .take(6)
+            .collect();
+
+        for f in movs {
+            let t_resolve = Instant::now();
+            let oid = resolve_object_id(dev.content(), &f.persistent_id).unwrap();
+            let d_resolve = t_resolve.elapsed();
+            let wide: Vec<u16> = oid.encode_utf16().chain(std::iter::once(0)).collect();
+
+            for round in 1..=2 {
+                let resources = unsafe { dev.content().Transfer().unwrap() };
+                let mut stream: Option<IStream> = None;
+                let mut buf_size = 0u32;
+                let t_get = Instant::now();
+                unsafe {
+                    resources
+                        .GetStream(
+                            PCWSTR(wide.as_ptr()),
+                            &WPD_RESOURCE_DEFAULT,
+                            STGM_READ.0,
+                            &mut buf_size,
+                            &mut stream,
+                        )
+                        .unwrap();
+                }
+                let d_get = t_get.elapsed();
+                let stream = stream.unwrap();
+                let chunk = buf_size.clamp(64 * 1024, 1024 * 1024) as usize;
+                let t_read = Instant::now();
+                let mut buf = vec![0u8; chunk];
+                let mut total = 0u64;
+                loop {
+                    let mut rd = 0u32;
+                    let hr = unsafe {
+                        stream.Read(
+                            buf.as_mut_ptr() as *mut core::ffi::c_void,
+                            chunk as u32,
+                            Some(&mut rd),
+                        )
+                    };
+                    if hr.is_err() || rd == 0 {
+                        break;
+                    }
+                    total += rd as u64;
+                }
+                let d_read = t_read.elapsed();
+                drop(stream);
+                drop(resources);
+                std::thread::sleep(Duration::from_millis(250));
+                println!(
+                    "{} round{round} sz={} got={} resolve={:?} get={:.2}s read={:.2}s {:.2}MB/s",
+                    f.name,
+                    f.size,
+                    total,
+                    d_resolve,
+                    d_get.as_secs_f32(),
+                    d_read.as_secs_f32(),
+                    (total as f64 / 1048576.0) / d_read.as_secs_f64().max(0.001)
+                );
+            }
+        }
+    }
 }
