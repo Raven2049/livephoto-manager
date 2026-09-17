@@ -12,16 +12,29 @@
 
 ---
 
-## 环境现状（2026-09-17 实测）
+## 环境现状（2026-09-17 在**原开发机**实测）
+
+> ⚠️ **下表是某一台具体机器上的实测快照，不是普遍事实。**
+> 换到别的开发机后**必须重新核对**，不要直接采信。尤其 `F:\vs2019` 这个路径和「Rust 未安装」都只是那台机器的状态。
+> 通用的工具链需求见仓库根目录 `AGENTS.md`。
 
 | 项 | 状态 | 计划中的处理 |
 |---|---|---|
 | Rust 工具链 | 未安装 | Task 1 安装 |
-| MSVC 编译器 | 已装（VS 2026，`F:\vs2019`，含 cl.exe / link.exe） | 无需处理 |
-| Windows SDK | 未安装（无头文件、无 import lib） | Task 2 安装 |
+| MSVC 编译器 | 已装（VS 2026，路径 `F:\vs2019`，含 cl.exe / link.exe） | 无需处理 |
+| Windows SDK | 未安装（`Windows Kits\10` 下只有 UnionMetadata，无头文件、无 import lib） | Task 2 安装 |
 | WebView2 运行时 | 已装 153.0.4234.32 | 本计划不需要 |
-| 网络 | static.rust-lang.org / crates.io 均 200 | 无需镜像 |
-| 系统 | Windows 10 Pro 19045 | 无需处理 |
+| 网络 | static.rust-lang.org / crates.io 均返回 200 | 无需镜像 |
+| 系统 | Windows 10 Pro 19045（22H2） | 无需处理 |
+
+**核对命令（换机器后先跑一遍）：**
+
+```powershell
+rustc --version; cargo --version
+Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Include" -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }
+Get-ChildItem "C:\Program Files*\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+Test-Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+```
 
 ---
 
