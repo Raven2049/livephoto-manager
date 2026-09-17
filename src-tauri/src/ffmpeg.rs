@@ -34,6 +34,10 @@ pub fn find_ffmpeg() -> anyhow::Result<PathBuf> {
 }
 
 /// 从静态图生成 512px WebP 缩略图的参数（不含程序名）。
+///
+/// 用 `-filter_complex` 而非 `-vf`：iPhone 的 HEIC 会暴露多个图像流，ffmpeg 内部会
+/// 构建复杂滤镜图，此时再用 `-vf`（简单滤镜）会报
+/// "Filtergraph ... was specified for a stream fed from a complex filtergraph"。
 pub fn still_thumb_args(input: &Path, output: &Path) -> Vec<String> {
     vec![
         "-hide_banner".into(),
@@ -42,7 +46,7 @@ pub fn still_thumb_args(input: &Path, output: &Path) -> Vec<String> {
         "-y".into(),
         "-i".into(),
         input.to_string_lossy().into_owned(),
-        "-vf".into(),
+        "-filter_complex".into(),
         "scale=512:-2".into(),
         "-frames:v".into(),
         "1".into(),
@@ -67,7 +71,7 @@ pub fn movie_thumb_args(input: &Path, output: &Path) -> Vec<String> {
         "0".into(),
         "-i".into(),
         input.to_string_lossy().into_owned(),
-        "-vf".into(),
+        "-filter_complex".into(),
         "scale=512:-2".into(),
         "-frames:v".into(),
         "1".into(),
