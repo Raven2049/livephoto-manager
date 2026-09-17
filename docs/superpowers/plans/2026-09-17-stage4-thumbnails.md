@@ -236,7 +236,7 @@ cargo add sha2 --package liveporter
 记录实际版本：
 
 ```
-（待填）
+（实测）sha2 0.11.0（其依赖 digest 0.11.3）
 ```
 
 - [ ] **Step 2: 写失败的测试**

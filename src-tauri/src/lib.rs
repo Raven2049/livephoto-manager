@@ -1,12 +1,14 @@
 mod commands;
 mod db;
 mod device;
+mod ffmpeg;
 mod importer;
 mod indexer;
 mod library;
 mod pairing;
 mod protocol;
 mod state;
+mod thumb;
 
 use tauri::Manager;
 
