@@ -1,7 +1,8 @@
 import { ref } from "vue";
 
-// 离散档位：列数越多 = 瓦片越小 = 越"缩小"
-const LEVELS = [3, 5, 7, 10, 14] as const;
+// 离散档位：列数越多 = 瓦片越小 = 越"缩小"。
+// 1 列是「单列大图流」（瀑布流式浏览），3 列是普通网格的最放大档。
+const LEVELS = [1, 3, 5, 7, 10, 14] as const;
 
 /**
  * 最大放大档位（最小的列数）受 DPR 限制：
@@ -22,7 +23,11 @@ export function useZoom(initial: number) {
 
   function allowedLevels(viewportCssWidth: number, dpr: number): number[] {
     const minCols = maxColumnsForDpr(viewportCssWidth, dpr);
-    return LEVELS.filter((c) => c >= minCols);
+    const levels: number[] = LEVELS.filter((c) => c >= minCols);
+    // 最大放大档（最小列数）永远可用：它是单列浏览档，用于瀑布流式大图阅读。
+    // 该档可能超过缩略图 512px 的清晰上限（设计 §7.4 的取舍），属有意为之。
+    if (levels[0] !== LEVELS[0]) levels.unshift(LEVELS[0]);
+    return levels;
   }
 
   /** 返回下一次缩放后的列数；到达边界时返回原值。delta<0 表示放大（列数变少）。 */

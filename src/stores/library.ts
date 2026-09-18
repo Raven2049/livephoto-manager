@@ -13,6 +13,9 @@ export interface AssetRow {
   movie_path: string | null;
   thumb_path: string | null;
   missing: boolean;
+  /** 缩略图尺寸（瀑布流用；无缩略图时为 null）。 */
+  thumb_w: number | null;
+  thumb_h: number | null;
 }
 
 export interface LibraryStats {
@@ -21,7 +24,21 @@ export interface LibraryStats {
   photo: number;
   video: number;
   missing: number;
+  missing_thumbs: number;
   by_integrity: [number, number][];
+}
+
+export interface ScanProgress {
+  devices: number;
+  files: number;
+  assets: number;
+}
+
+export interface RecentLibrary {
+  path: string;
+  name: string;
+  last_opened: number;
+  exists: boolean;
 }
 
 /** 供 PhotoGrid 显示的最小结构。 */
@@ -119,6 +136,10 @@ export const useLibrary = defineStore("library", () => {
       await invoke("open_library", { path });
       root.value = path;
       await refresh();
+      // 自动维护：索引为空但有文件 → 重建索引；有缺缩略图 → 自动补。
+      if ((stats.value?.total ?? 0) === 0) await rescan();
+      if ((stats.value?.missing_thumbs ?? 0) > 0) await generateThumbs();
+      await loadRecents();
     } catch (e) {
       error.value = String(e);
     } finally {
@@ -126,17 +147,52 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
+  /* ---------- 最近打开的资料库 ---------- */
+  const recents = ref<RecentLibrary[]>([]);
+
+  async function loadRecents() {
+    try {
+      recents.value = await invoke<RecentLibrary[]>("recent_libraries");
+    } catch {
+      /* 读取失败就当作没有缓存 */
+    }
+  }
+
+  async function forgetRecent(path: string) {
+    try {
+      recents.value = await invoke<RecentLibrary[]>("forget_library", { path });
+    } catch (e) {
+      error.value = String(e);
+    }
+  }
+
+  /** 重建索引期间为真：界面显示细进度条（非阻塞）。 */
+  const scanning = ref(false);
+  const scanProgress = ref<ScanProgress | null>(null);
+
   async function rescan() {
     busy.value = true;
+    scanning.value = true;
+    scanProgress.value = null;
     error.value = null;
+    const un = await listen<ScanProgress>("scan://progress", (e) => {
+      scanProgress.value = e.payload;
+    });
     try {
       await invoke("scan_library");
       await refresh();
     } catch (e) {
       error.value = String(e);
     } finally {
+      un();
       busy.value = false;
+      scanning.value = false;
+      scanProgress.value = null;
     }
+  }
+
+  async function cancelScan() {
+    await invoke("cancel_scan");
   }
 
   const thumbs = ref<{ total: number; done: number; failed: number } | null>(null);
@@ -222,6 +278,32 @@ export const useLibrary = defineStore("library", () => {
     setSelected(next);
   }
 
+  /** 批量设置选中态（用于拖拽涂抹选择）。 */
+  function setSelection(ids: number[], value: boolean) {
+    if (!ids.length) return;
+    const next = new Set(selected.value);
+    for (const id of ids) {
+      if (value) next.add(id);
+      else next.delete(id);
+    }
+    setSelected(next);
+  }
+
+  /** 只选中一项（右键菜单用）。 */
+  function selectOnly(id: number) {
+    setSelected(new Set([id]));
+  }
+
+  /** 清空全部筛选条件并重新加载。 */
+  function clearFilters() {
+    filter.text = "";
+    filter.kind = null;
+    filter.integrity = [];
+    filter.from = null;
+    filter.to = null;
+    void reload();
+  }
+
   /** 选中当前筛选条件下的整库（后端只回 id）。 */
   async function selectAll() {
     const ids = await invoke<number[]>("list_asset_ids", {
@@ -291,9 +373,15 @@ export const useLibrary = defineStore("library", () => {
 
   return {
     root,
+    recents,
+    loadRecents,
+    forgetRecent,
     assets,
     stats,
     busy,
+    scanning,
+    scanProgress,
+    cancelScan,
     error,
     thumbs,
     filter,
@@ -311,6 +399,9 @@ export const useLibrary = defineStore("library", () => {
     refreshStats,
     refresh,
     toggleSelect,
+    setSelection,
+    selectOnly,
+    clearFilters,
     selectAll,
     clearSelection,
     exporting,

@@ -79,6 +79,36 @@ svg {
   display: block;
 }
 
+/* ---------- 禁止文本/图片被框选与拖动（桌面 app 行为） ----------
+ * 默认全局不可选中；需要选择或复制的元素显式加 `.selectable`，
+ * 或做成「点击即可复制」（见 App.vue 的 copyText）。
+ * 表单控件保持可选中，否则输入框无法选字。 */
+html,
+body,
+#app {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+input,
+textarea,
+[contenteditable="true"],
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+}
+img,
+video,
+a {
+  -webkit-user-drag: none;
+  user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+img {
+  pointer-events: auto;
+}
+
 /* 滚动条：更像系统（细、半透明，悬停加深） */
 ::-webkit-scrollbar {
   width: 12px;

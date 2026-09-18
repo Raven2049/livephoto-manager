@@ -1,16 +1,15 @@
 <script setup lang="ts">
-import { ref } from "vue";
 import { useLibrary } from "../stores/library";
 import AppIcon from "./AppIcon.vue";
 
 const lib = useLibrary();
-const text = ref(lib.filter.text);
 let timer: number | undefined;
 
-function onText() {
+function onInput(e: Event) {
+  const value = (e.target as HTMLInputElement).value;
   if (timer !== undefined) clearTimeout(timer);
   timer = window.setTimeout(() => {
-    lib.filter.text = text.value;
+    lib.filter.text = value;
     void lib.reload();
   }, 250);
 }
@@ -45,20 +44,19 @@ function toggleIntegrity(v: number) {
 }
 
 function clearAll() {
-  text.value = "";
-  lib.filter.text = "";
-  lib.filter.kind = null;
-  lib.filter.integrity = [];
-  lib.filter.from = null;
-  lib.filter.to = null;
-  void lib.reload();
+  lib.clearFilters();
 }
 </script>
 
 <template>
   <div class="search">
     <AppIcon name="search" :size="15" />
-    <input v-model="text" type="search" placeholder="搜索文件名" @input="onText" />
+    <input
+      :value="lib.filter.text"
+      type="search"
+      placeholder="搜索文件名"
+      @input="onInput"
+    />
   </div>
 
   <div class="seg">

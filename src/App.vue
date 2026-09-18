@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useLibrary, type AssetRow } from "./stores/library";
 import { useImport } from "./stores/import";
@@ -18,12 +19,12 @@ const main = ref<HTMLElement | null>(null);
 const assumeCloud = ref(false);
 
 /* ---------- Toast ---------- */
-type Toast = { id: number; text: string; kind: "info" | "error" };
+type Toast = { id: number; text: string; kind: "info" | "error"; copy?: string };
 const toasts = ref<Toast[]>([]);
 let toastSeq = 0;
-function toast(text: string, kind: "info" | "error" = "info") {
+function toast(text: string, kind: "info" | "error" = "info", copy?: string) {
   const id = ++toastSeq;
-  toasts.value = [...toasts.value, { id, text, kind }];
+  toasts.value = [...toasts.value, { id, text, kind, copy }];
   window.setTimeout(() => {
     toasts.value = toasts.value.filter((t) => t.id !== id);
   }, 4000);
@@ -32,6 +33,25 @@ function toastError() {
   if (lib.error) {
     toast(lib.error, "error");
     lib.error = null;
+  }
+}
+
+/** 点击复制（桌面 app 里替代可框选文本）。 */
+async function copyText(text: string) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("no clipboard api");
+    await navigator.clipboard.writeText(text);
+    toast("已复制");
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    toast(ok ? "已复制" : "复制失败", ok ? "info" : "error");
   }
 }
 
@@ -60,10 +80,19 @@ async function pickLibrary() {
 async function importFromDevice() {
   await imp.start(assumeCloud.value);
   await lib.refresh();
-  if (imp.error) toast(imp.error, "error");
-  else if (imp.progress) {
-    const { done, total, failed } = imp.progress;
-    toast(`导入完成 ${done}/${total}${failed ? ` · 失败 ${failed}` : ""}`, failed ? "error" : "info");
+  if (imp.error) {
+    toast(imp.error, "error");
+    return;
+  }
+  const p = imp.progress;
+  if (!p) return;
+  if (p.cancelled) {
+    toast(`已取消（${p.done}/${p.total}）`);
+  } else {
+    toast(
+      `导入完成 ${p.done}/${p.total}${p.failed ? ` · 失败 ${p.failed}` : ""}`,
+      p.failed ? "error" : "info",
+    );
   }
 }
 
@@ -90,7 +119,7 @@ async function doClassify() {
 async function exportDiag() {
   try {
     const path = await lib.exportDiagnostics();
-    toast(`诊断报告已生成：${path}`);
+    toast(`诊断报告已生成：${path}`, "info", path);
   } catch (e) {
     toast(String(e), "error");
   }
@@ -102,7 +131,7 @@ async function exportSelected() {
   const n = lib.selected.size;
   await lib.exportSelected(dir);
   if (lib.error) toastError();
-  else toast(`已导出 ${n} 个条目到 ${dir}`);
+  else toast(`已导出 ${n} 个条目到 ${dir}`, "info", dir);
 }
 
 async function deleteSelected() {
@@ -130,12 +159,43 @@ const gran = computed<Granularity>(() =>
   lib.granOverride === "auto" ? granularityForColumns(zoom.columns.value) : lib.granOverride,
 );
 const groups = computed(() => groupAssets(gridAssets.value, gran.value));
+// 最大一档（1 列）是单列大图流；3 列仍是普通网格。
+const masonry = computed(() => zoom.columns.value <= 1);
+
+/* ---------- 单列流：按需生成高清大图 ---------- */
+const largeById = ref<Record<number, string>>({});
+const largeInflight = new Set<number>();
+let largeActive = 0;
+const MAX_LARGE = 2;
+
+async function ensureLarge(id: number) {
+  if (!masonry.value) return;
+  if (largeById.value[id] || largeInflight.has(id)) return;
+  if (largeActive >= MAX_LARGE) return; // 限流：下次可见再试
+  largeInflight.add(id);
+  largeActive++;
+  try {
+    const p = await invoke<string>("ensure_large", { assetId: id });
+    largeById.value = { ...largeById.value, [id]: p };
+  } catch {
+    /* 生成失败就退回缩略图 */
+  } finally {
+    largeInflight.delete(id);
+    largeActive--;
+  }
+}
+function onNeedLarge(ids: number[]) {
+  for (const id of ids) void ensureLarge(id);
+}
 
 function onNearEnd() {
   void lib.loadMore();
 }
 function onToggleSelect(id: number) {
   lib.toggleSelect(id);
+}
+function onSetSelected(id: number, value: boolean) {
+  lib.setSelection([id], value);
 }
 
 const slotStyle = computed(() => {
@@ -162,6 +222,7 @@ function onHoverOut() {
 function onSuppress() {
   pv.suppress();
   hoverRect.value = null;
+  ctx.value = null; // 滚动时收起右键菜单
 }
 function onWheel(e: WheelEvent) {
   if (!e.ctrlKey) return;
@@ -173,11 +234,67 @@ function onWheel(e: WheelEvent) {
   zoom.columns.value = zoom.next(e.deltaY, vw, dpr);
   nextTick(() => grid.value?.restoreAnchor(anchor));
 }
+/** 全局禁止原生拖拽（图片/链接/文本），需要拖拽的交互再单独放行。 */
+function preventDrag(e: DragEvent) {
+  e.preventDefault();
+}
+
+/* ---------- 侧栏「更多」菜单 ---------- */
+const menuOpen = ref(false);
+function runMenu(fn: () => unknown) {
+  menuOpen.value = false;
+  void fn();
+}
+function onDocClick() {
+  menuOpen.value = false;
+  ctx.value = null;
+}
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    menuOpen.value = false;
+    ctx.value = null;
+  }
+}
+
+/* ---------- 瓦片右键菜单（只放主界面已有的动作；删除置底红色） ---------- */
+const ctx = ref<{ x: number; y: number } | null>(null);
+function onContextMenu(id: number, x: number, y: number) {
+  if (!lib.selected.has(id)) lib.selectOnly(id);
+  ctx.value = {
+    x: Math.min(x, window.innerWidth - 200),
+    y: Math.min(y, window.innerHeight - 150),
+  };
+}
+function ctxExport() {
+  ctx.value = null;
+  void exportSelected();
+}
+function ctxDelete() {
+  ctx.value = null;
+  void deleteSelected();
+}
+
+async function openRecent(path: string) {
+  await lib.openLibrary(path);
+  if (lib.error) {
+    toast(lib.error, "error");
+    lib.error = null;
+  }
+}
+async function forgetRecent(path: string) {
+  await lib.forgetRecent(path);
+}
+
 onMounted(() => {
-  main.value?.addEventListener("wheel", onWheel, { passive: false });
+  document.addEventListener("dragstart", preventDrag);
+  document.addEventListener("click", onDocClick);
+  document.addEventListener("keydown", onKeydown);
+  void lib.loadRecents();
 });
 onBeforeUnmount(() => {
-  main.value?.removeEventListener("wheel", onWheel);
+  document.removeEventListener("dragstart", preventDrag);
+  document.removeEventListener("click", onDocClick);
+  document.removeEventListener("keydown", onKeydown);
 });
 
 /* ---------- 进度与统计 ---------- */
@@ -211,24 +328,107 @@ const filtersActive = computed(
 </script>
 
 <template>
-  <div class="app">
+  <!-- ================= 欢迎 / 选择资料库（无库时整屏） ================= -->
+  <div v-if="!lib.root" class="welcome">
+    <div class="welcome-inner">
+      <div class="hero">
+        <div class="hero-logo">L</div>
+        <h1>LivePorter</h1>
+        <p>把 iPhone 的实况照片原样搬进硬盘</p>
+      </div>
+
+      <template v-if="lib.recents.length">
+        <div class="group-title">最近</div>
+        <ul class="group-list">
+          <li
+            v-for="r in lib.recents"
+            :key="r.path"
+            class="group-row"
+            :class="{ gone: !r.exists }"
+          >
+            <button class="row-main" :disabled="!r.exists" @click="openRecent(r.path)">
+              <span class="row-icon"><AppIcon name="folder" :size="16" /></span>
+              <span class="row-text">
+                <span class="row-name">{{ r.name }}</span>
+                <span class="row-sub">{{ r.exists ? r.path : r.path + " · 位置不存在" }}</span>
+              </span>
+              <span class="row-chevron">›</span>
+            </button>
+            <button class="row-remove" title="移除" @click="forgetRecent(r.path)">✕</button>
+          </li>
+        </ul>
+        <button class="btn prominent welcome-cta" @click="pickLibrary">
+          打开其他资料库…
+        </button>
+      </template>
+
+      <template v-else>
+        <ol class="steps">
+          <li>
+            <span class="step-n">1</span>
+            <div><b>打开资料库</b><span>选一个硬盘目录存放照片</span></div>
+          </li>
+          <li>
+            <span class="step-n">2</span>
+            <div><b>iPhone 设为「保留原件」</b><span>设置 → 照片 → 传输到 Mac 或 PC</span></div>
+          </li>
+          <li>
+            <span class="step-n">3</span>
+            <div><b>从 iPhone 导入</b><span>插上线即可，支持断点续传</span></div>
+          </li>
+        </ol>
+        <button class="btn prominent welcome-cta" @click="pickLibrary">打开资料库…</button>
+      </template>
+    </div>
+  </div>
+
+  <div v-else class="app">
     <!-- ================= 侧栏 ================= -->
     <aside class="sidebar">
       <div class="brand">
         <div class="logo">L</div>
-        <div>
+        <div class="brand-text">
           <h1>LivePorter</h1>
           <div class="sub">iPhone 实况照片搬运</div>
+        </div>
+        <button
+          class="icon-btn"
+          title="更多"
+          aria-label="更多操作"
+          :aria-expanded="menuOpen"
+          @click.stop="menuOpen = !menuOpen"
+        >
+          ⋯
+        </button>
+        <div v-if="menuOpen" class="menu" @click.stop>
+          <button class="menu-item" :disabled="!lib.root || lib.busy" @click="runMenu(doRescan)">
+            重建索引
+          </button>
+          <button class="menu-item" :disabled="!lib.root || lib.busy" @click="runMenu(doThumbs)">
+            生成缩略图
+          </button>
+          <button class="menu-item" :disabled="!lib.root || lib.busy" @click="runMenu(doClassify)">
+            校验标识
+          </button>
+          <div class="menu-sep"></div>
+          <button class="menu-item" :disabled="!lib.root" @click="runMenu(exportDiag)">
+            导出诊断报告…
+          </button>
         </div>
       </div>
 
       <div class="sec">
         <div class="sec-title">资料库</div>
         <div class="card">
-          <div class="libpath">
+          <button
+            class="libpath"
+            :title="lib.root ? '点击复制路径' : ''"
+            :disabled="!lib.root"
+            @click="lib.root && copyText(lib.root)"
+          >
             <AppIcon name="folder" :size="14" />
             <span>{{ lib.root || "未打开资料库" }}</span>
-          </div>
+          </button>
           <button class="btn block" style="margin-top: 10px" @click="pickLibrary">
             打开资料库…
           </button>
@@ -281,22 +481,6 @@ const filtersActive = computed(
         </template>
       </div>
 
-      <div class="sec">
-        <div class="sec-title">维护</div>
-        <button class="action" :disabled="!lib.root || lib.busy" @click="doRescan">
-          <AppIcon name="refresh" />重建索引
-        </button>
-        <button class="action" :disabled="!lib.root || lib.busy" @click="doThumbs">
-          <AppIcon name="image" />生成缩略图
-        </button>
-        <button class="action" :disabled="!lib.root || lib.busy" @click="doClassify">
-          <AppIcon name="shield" />校验标识
-        </button>
-        <button class="action" :disabled="!lib.root || lib.busy" @click="exportDiag">
-          <AppIcon name="doc" />导出诊断报告
-        </button>
-      </div>
-
       <div class="spacer"></div>
       <div class="sidefoot">v1.0.0 · GPL-3.0 · ffmpeg 9.0.1</div>
     </aside>
@@ -308,36 +492,44 @@ const filtersActive = computed(
         <FilterBar />
         <div class="status">
           已加载 {{ lib.assets.length.toLocaleString() }}/{{ lib.total.toLocaleString() }} ·
-          {{ zoom.columns.value }} 列
+          {{ masonry ? "单列" : zoom.columns.value + " 列" }}
         </div>
       </div>
 
-      <div class="stage" ref="main">
+      <div v-if="lib.scanning" class="scanbar">
+        <div class="scanbar-track"><i></i></div>
+        <span class="scanbar-text">
+          正在重建索引… {{ lib.scanProgress?.files ?? 0 }} 个文件 ·
+          {{ lib.scanProgress?.assets ?? 0 }} 个条目
+        </span>
+        <button class="btn plain" @click="lib.cancelScan">取消</button>
+      </div>
+
+      <div class="stage" ref="main" @wheel="onWheel">
         <PhotoGrid
           ref="grid"
           :groups="groups"
           :columns="zoom.columns.value"
-          :gap="8"
+          :gap="2"
           :granularity="gran"
           :selected="lib.selected"
           :has-more="lib.assets.length < lib.total"
+          :loading="lib.loading"
+          :masonry="masonry"
+          :large-by-id="largeById"
           @hover="onHover"
           @hover-out="onHoverOut"
           @suppress="onSuppress"
           @toggle-select="onToggleSelect"
+          @set-selected="onSetSelected"
+          @need-large="onNeedLarge"
           @near-end="onNearEnd"
+          @context-menu="onContextMenu"
+          @request-delete="deleteSelected"
         />
 
-        <!-- 空状态 -->
-        <div v-if="!lib.root" class="empty">
-          <div class="empty-card">
-            <div class="empty-logo">L</div>
-            <h2>打开资料库开始</h2>
-            <p class="muted">选择一个硬盘目录作为资料库，导入的实况照片都会放在里面。</p>
-            <button class="btn prominent" @click="pickLibrary">打开资料库…</button>
-          </div>
-        </div>
-        <div v-else-if="noResults" class="empty">
+        <!-- 筛选无结果 / 空库 -->
+        <div v-if="noResults" class="empty">
           <div class="empty-card">
             <h2>{{ filtersActive ? "没有匹配项" : "资料库还是空的" }}</h2>
             <p class="muted">
@@ -347,6 +539,9 @@ const filtersActive = computed(
                   : "插上 iPhone，点侧栏的「从 iPhone 导入」。"
               }}
             </p>
+            <button v-if="filtersActive" class="btn" @click="lib.clearFilters">
+              清空筛选
+            </button>
           </div>
         </div>
 
@@ -380,10 +575,36 @@ const filtersActive = computed(
 
     <!-- ================= Toast ================= -->
     <div class="toasts" aria-live="polite">
-      <div v-for="t in toasts" :key="t.id" class="toast" :class="t.kind">
+      <div
+        v-for="t in toasts"
+        :key="t.id"
+        class="toast"
+        :class="[t.kind, { clickable: t.copy }]"
+        :title="t.copy ? '点击复制' : ''"
+        @click="t.copy && copyText(t.copy)"
+      >
         <AppIcon :name="t.kind === 'error' ? 'warn' : 'check'" :size="15" />
         <span>{{ t.text }}</span>
       </div>
+    </div>
+
+    <!-- ================= 瓦片右键菜单 ================= -->
+    <div
+      v-if="ctx"
+      class="ctxmenu"
+      :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }"
+      @click.stop
+    >
+      <div v-if="lib.selected.size > 1" class="ctx-title">
+        已选 {{ lib.selected.size }} 项
+      </div>
+      <button class="menu-item" @click="ctxExport">
+        <AppIcon name="export" :size="15" />导出选中…
+      </button>
+      <div class="menu-sep"></div>
+      <button class="menu-item danger" @click="ctxDelete">
+        <AppIcon name="trash" :size="15" />删除选中…
+      </button>
     </div>
 
     <!-- ================= 确认框 ================= -->
@@ -443,6 +664,306 @@ const filtersActive = computed(
   font-size: 12px;
   color: var(--label-2);
 }
+.brand {
+  position: relative;
+}
+.brand-text {
+  flex: 1;
+  min-width: 0;
+}
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--label-2);
+  font-size: 18px;
+  line-height: 1;
+}
+.icon-btn:hover {
+  background: var(--fill);
+  color: var(--label);
+}
+
+/* 「更多」下拉菜单 */
+.menu {
+  position: absolute;
+  top: 52px;
+  right: 12px;
+  min-width: 180px;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--separator);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  z-index: 40;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--label);
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+.menu-item:hover:not(:disabled) {
+  background: var(--fill);
+}
+.menu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.menu-item.danger {
+  color: var(--danger);
+}
+.menu-item.danger:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.menu-sep {
+  height: 1px;
+  background: var(--separator);
+  margin: 6px 4px;
+}
+
+/* 瓦片右键菜单 */
+.ctxmenu {
+  position: fixed;
+  min-width: 184px;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--separator);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  z-index: 45;
+}
+.ctx-title {
+  font-size: 11px;
+  color: var(--label-3);
+  padding: 6px 10px 4px;
+}
+
+/* 重建索引：细进度条（非阻塞） */
+.scanbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  background: var(--material);
+  border-bottom: 1px solid var(--separator);
+  font-size: 12px;
+  color: var(--label-2);
+}
+.scanbar-track {
+  position: relative;
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--fill);
+  overflow: hidden;
+}
+.scanbar-track i {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 30%;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: scan-slide 1.1s ease-in-out infinite;
+}
+@keyframes scan-slide {
+  0% {
+    left: -30%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+.scanbar-text {
+  white-space: nowrap;
+}
+.scanbar .btn {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* 欢迎 / 选择资料库 */
+.welcome {
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+  overflow: auto;
+}
+.welcome-inner {
+  width: min(520px, 92vw);
+}
+.hero {
+  text-align: center;
+  margin-bottom: 26px;
+}
+.hero-logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 15px;
+  margin: 0 auto 14px;
+  background: linear-gradient(135deg, var(--accent), #7a6bff);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  color: #fff;
+  font-size: 26px;
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.hero h1 {
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  margin: 0 0 6px;
+}
+.hero p {
+  margin: 0;
+  color: var(--label-2);
+  font-size: 15px;
+}
+
+.group-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--label-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 6px 8px;
+}
+.group-list {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  background: var(--card);
+  border: 1px solid var(--separator);
+  border-radius: 16px;
+  overflow: hidden;
+}
+.group-row {
+  display: flex;
+  align-items: stretch;
+}
+.group-row + .group-row {
+  border-top: 1px solid var(--separator);
+}
+.row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+}
+.row-main:hover:not(:disabled) {
+  background: var(--fill);
+}
+.row-main:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.row-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  flex: none;
+  background: var(--fill);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+}
+.row-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.row-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.row-sub {
+  font-size: 12px;
+  color: var(--label-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-row.gone .row-name {
+  color: var(--label-2);
+}
+.row-chevron {
+  color: var(--label-3);
+  font-size: 18px;
+  margin-left: auto;
+}
+.row-remove {
+  width: 42px;
+  border: 0;
+  background: transparent;
+  color: var(--label-3);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.group-row:hover .row-remove {
+  opacity: 1;
+}
+.row-remove:hover {
+  color: var(--danger);
+}
+.welcome-cta {
+  width: 100%;
+  min-height: 40px;
+}
+
+/* 首次引导步骤 */
+.steps {
+  list-style: none;
+  margin: 0 0 22px;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+.steps li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.step-n {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--fill);
+  color: var(--label);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 600;
+}
+.steps b {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+.steps li div span {
+  font-size: 12px;
+  color: var(--label-2);
+}
 .sec {
   padding: 4px 12px 12px;
 }
@@ -458,10 +979,22 @@ const filtersActive = computed(
   display: flex;
   gap: 7px;
   align-items: flex-start;
+  width: 100%;
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
   font-size: 12px;
   color: var(--label-2);
   word-break: break-all;
   line-height: 1.35;
+  cursor: pointer;
+}
+.libpath:hover:not(:disabled) {
+  color: var(--label);
+}
+.libpath:disabled {
+  cursor: default;
 }
 .stats {
   display: grid;
@@ -583,7 +1116,7 @@ const filtersActive = computed(
   display: block;
   opacity: 0;
   transition: opacity 120ms linear;
-  border-radius: var(--r-tile);
+  border-radius: 0;
 }
 .preview.show {
   opacity: 1;
@@ -625,6 +1158,7 @@ const filtersActive = computed(
   border-radius: 16px;
   box-shadow: var(--shadow);
   z-index: 10;
+  white-space: nowrap;
 }
 .selbar .count {
   font-size: 13px;
@@ -663,6 +1197,9 @@ const filtersActive = computed(
 }
 .toast.error {
   color: var(--danger);
+}
+.toast.clickable {
+  cursor: pointer;
 }
 
 /* 确认框 */
