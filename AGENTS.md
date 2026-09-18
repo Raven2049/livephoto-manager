@@ -27,7 +27,10 @@
 | 预览实测 | `docs/superpowers/notes/2026-09-18-preview-smoke.md` | 阶段 5 合成库实测（**本轮用合成素材，真实 iPhone 素材待补**） |
 | 计划 7 | `docs/superpowers/plans/2026-09-18-stage6-integrity-diagnostics.md` | 阶段 6：UUID 校验 + 异常分类 + iCloud 手动开关 + 诊断报告（**已完成**） |
 | 校验实测 | `docs/superpowers/notes/2026-09-18-integrity-smoke.md` | 阶段 6 真机实测（含 content-id 探测记录同目录） |
-| 计划 8+ | 尚未编写 | 浏览体验与 UI（时间线/搜索/导出/删除）；打包分发（绿色版） |
+| 计划 8 | `docs/superpowers/plans/2026-09-18-stage7-browse-ui.md` | 阶段 7：浏览体验与 UI（时间线分组/搜索筛选/多选导出/从库删除）（**已实现**） |
+| 实测记录 | `docs/superpowers/notes/2026-09-18-browse-smoke.md` | 阶段 7 自动化验证（GUI 交互实测待补） |
+| 计划 9 | `docs/superpowers/plans/2026-09-18-stage8-portable-packaging.md` | 阶段 8：打包分发（绿色版：组装脚本 + 裁剪 ffmpeg + README + 发布流程）（**已实现并验收**；仅剩实际发 GitHub Release） |
+| 打包实测 | `docs/superpowers/notes/2026-09-18-packaging-smoke.md` | 阶段 8 打包实测（no-bundle 产物、依赖、组装、启动） |
 
 ## 当前进度
 
@@ -43,9 +46,36 @@
   悬停播放、快速划过不触发、滚动/缩放不触发、DevTools 确认只有一个 `<video>`，均已实测通过
 - [x] **计划 7（阶段 6 UUID 校验 + 异常分类 + iCloud 手动开关 + 诊断报告）编写并实现完成**：真实 iPhone 上
   `content_id` 两侧一致、`integrity=0`；回填命令与诊断导出均实测通过
-- [ ] 计划 8+ 尚未编写
+- [x] **计划 8（阶段 7 浏览体验与 UI）编写并实现完成**：年/月/天多级时间线、搜索筛选（文字/类型/日期/完整性）、
+  分页增量加载、多选导出（\`trash\` 回收站删除）、从库删除与孤儿缓存清理。自动化验证全绿
+  （liveporter 63 + probe 25 单测、clippy -D warnings、fmt、vue-tsc、vite build）。
+  GUI 经用户 dev 冒烟确认无明显问题；**逐项清单仍待完整复验**，见
+  `docs/superpowers/notes/2026-09-18-browse-smoke.md`
+- [x] **计划 9（阶段 8 打包分发，绿色版）编写完成**：`tauri build --no-bundle` 组装脚本、
+  裁剪版 ffmpeg（15~25 MB）、DLL 依赖收集、README.txt、GitHub Release 流程。
+  文档见 `docs/superpowers/plans/2026-09-18-stage8-portable-packaging.md`，**尚待实现**
 
-**下一步：编写计划 8（浏览体验与 UI：时间线分组、搜索筛选、多选导出、从库删除）。**对应设计 §9；之后是计划 9（打包分发，绿色版，见设计 §11 与决策 20）。
+计划 9 的 7 项取舍已过审：裁剪 ffmpeg 本计划就做、捆绑 VC 运行时 DLL、首发版本 1.0.0、
+资源解析默认不改、动态 CRT、组装脚本用 PowerShell 5.1、最低 Windows 10 1809+。
+
+**计划 9 进展（2026-09-18）：**
+- [x] **Task 0** `--no-bundle` 产物实测：只有单个 `liveporter.exe`（6.05 MB），依赖全是系统组件，
+  **无 VC++ 运行时 / WebView2Loader 依赖**（否决了「捆绑 DLL」的原决策）；`resource_dir()` = exe 目录，
+  `resources/ffmpeg.exe` 解析成功；Task 3 无需改代码
+- [x] **Task 1** 裁剪 ffmpeg：MSYS2 + MinGW-w64 + 源码裁剪完成，`scripts/build-ffmpeg.sh`；
+  `ffmpeg.exe` 6.31 MB + `ffprobe.exe` 6.15 MB（≈12.46 MB）。真实 iPhone 素材三路径 + 三个 Rust ignored
+  冒烟全过。**关键点：HEIC 需要 `xstack` 滤镜**（否则报 `No such filter: 'xstack'`）。产物在
+  `C:\Users\Raven\ffmpeg-build\out\bin`（仓库外）
+- [x] **Task 2** `scripts/deps-check.ps1`（本机输出：无非系统 DLL）
+- [x] **Task 4** 版本同步为 `1.0.0`；`scripts/package-portable.ps1`（假 ffmpeg 冒烟通过，zip 结构正确）
+- [x] **Task 5** `docs/portable-readme.txt`（UTF-8 BOM）
+- [x] **Task 6** 干净环境人工验收：用户在真实库上实测打包版，**功能全部 OK**。验收中修复两个 bug：
+  (a) 子进程弹黑框 → `ffmpeg::command()` 加 `CREATE_NO_WINDOW`；
+  (b) 重扫产生重复行/「未知日期」→ `db::device_id_for_folder()` 让 indexer 复用已有设备行
+- [x] **Task 7** `docs/releasing.md`
+- 实测记录：`docs/superpowers/notes/2026-09-18-packaging-smoke.md`
+
+**下一步：按 `docs/releasing.md` 做首次发布（打 tag + `gh release`）。可选后续：NSIS 安装包、代码签名。**
 
 ### 真机验证（已在 2026-09-18 补齐）
 
