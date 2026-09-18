@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useLibrary } from "../stores/library";
+import AppIcon from "./AppIcon.vue";
 
 const lib = useLibrary();
 const text = ref(lib.filter.text);
@@ -43,10 +44,6 @@ function toggleIntegrity(v: number) {
   void lib.reload();
 }
 
-function onDate() {
-  void lib.reload();
-}
-
 function clearAll() {
   text.value = "";
   lib.filter.text = "";
@@ -59,83 +56,47 @@ function clearAll() {
 </script>
 
 <template>
-  <div class="filterbar">
-    <input
-      v-model="text"
-      class="search"
-      type="search"
-      placeholder="搜索文件名"
-      @input="onText"
-    />
-
-    <span class="group">
-      <button
-        v-for="k in kinds"
-        :key="String(k.value)"
-        :class="{ active: lib.filter.kind === k.value }"
-        @click="setKind(k.value)"
-      >
-        {{ k.label }}
-      </button>
-    </span>
-
-    <span class="group">
-      <input type="date" v-model="lib.filter.from" @change="onDate" />
-      <span class="muted">至</span>
-      <input type="date" v-model="lib.filter.to" @change="onDate" />
-    </span>
-
-    <span class="group integ">
-      <button
-        v-for="i in integrities"
-        :key="i.value"
-        :class="{ active: lib.filter.integrity.includes(i.value) }"
-        @click="toggleIntegrity(i.value)"
-      >
-        {{ i.label }}
-      </button>
-    </span>
-
-    <span class="group">
-      分段
-      <select v-model="lib.granOverride">
-        <option value="auto">自动</option>
-        <option value="year">年</option>
-        <option value="month">月</option>
-        <option value="day">天</option>
-      </select>
-    </span>
-
-    <button @click="clearAll">清空筛选</button>
+  <div class="search">
+    <AppIcon name="search" :size="15" />
+    <input v-model="text" type="search" placeholder="搜索文件名" @input="onText" />
   </div>
-</template>
 
-<style scoped>
-.filterbar {
-  padding: 6px 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  border-top: 1px solid #222;
-}
-.search {
-  min-width: 160px;
-}
-.group {
-  display: inline-flex;
-  gap: 4px;
-  align-items: center;
-}
-.group button.active {
-  background: #4af;
-  color: #fff;
-  border-color: #4af;
-}
-.integ button {
-  font-size: 12px;
-}
-.muted {
-  color: #888;
-}
-</style>
+  <div class="seg">
+    <button
+      v-for="k in kinds"
+      :key="String(k.value)"
+      :class="{ active: lib.filter.kind === k.value }"
+      @click="setKind(k.value)"
+    >
+      {{ k.label }}
+    </button>
+  </div>
+
+  <input
+    class="field"
+    type="date"
+    v-model="lib.filter.from"
+    @change="lib.reload"
+  />
+  <span class="muted" style="font-size: 12px">至</span>
+  <input class="field" type="date" v-model="lib.filter.to" @change="lib.reload" />
+
+  <button
+    v-for="i in integrities"
+    :key="i.value"
+    class="chip"
+    :class="{ active: lib.filter.integrity.includes(i.value) }"
+    @click="toggleIntegrity(i.value)"
+  >
+    {{ i.label }}
+  </button>
+
+  <select class="field" v-model="lib.granOverride" title="时间线分段粒度">
+    <option value="auto">分段：自动</option>
+    <option value="year">年</option>
+    <option value="month">月</option>
+    <option value="day">天</option>
+  </select>
+
+  <button class="btn plain" title="清空筛选" @click="clearAll">清空</button>
+</template>

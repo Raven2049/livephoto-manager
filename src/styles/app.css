@@ -1,0 +1,345 @@
+/* LivePorter 全局样式与设计令牌。
+ *
+ * 依据 Apple 经典 HIG（不含 iOS 26+ 的 Liquid Glass，见 AGENTS.md）：
+ * 系统语义色、8pt 栅格、同心圆角、标准材质（毛玻璃）、44pt 命中区。
+ * 主题跟随系统深浅（prefers-color-scheme），不做应用内主题开关。
+ */
+
+:root {
+  /* 浅色：分组背景 + 语义标签色 + 系统蓝 */
+  --bg: #f2f2f7;
+  --card: #ffffff;
+  --tile: #e5e5ea; /* systemGray5 */
+  --material: rgba(255, 255, 255, 0.72);
+  --material-strong: rgba(249, 249, 249, 0.92);
+  --fill: rgba(120, 120, 128, 0.12);
+  --fill-2: rgba(120, 120, 128, 0.2);
+  --label: rgba(0, 0, 0, 0.85);
+  --label-2: rgba(60, 60, 67, 0.6);
+  --label-3: rgba(60, 60, 67, 0.3);
+  --separator: rgba(60, 60, 67, 0.29);
+  --accent: #0088ff; /* systemBlue light */
+  --on-accent: #ffffff;
+  --danger: #ff3b30; /* systemRed light */
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+
+  /* 同心圆角：内圆角 + 内边距 = 外圆角 */
+  --r-card: 16px;
+  --r-tile: 12px;
+  --r-ctl: 10px;
+  --r-pill: 999px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000; /* base */
+    --card: #1c1c1e; /* elevated */
+    --tile: #2c2c2e;
+    --material: rgba(28, 28, 30, 0.72);
+    --material-strong: rgba(28, 28, 30, 0.92);
+    --fill: rgba(120, 120, 128, 0.24);
+    --fill-2: rgba(120, 120, 128, 0.36);
+    --label: rgba(255, 255, 255, 0.9);
+    --label-2: rgba(235, 235, 245, 0.6);
+    --label-3: rgba(235, 235, 245, 0.3);
+    --separator: rgba(84, 84, 88, 0.65);
+    --accent: #0091ff; /* systemBlue dark */
+    --danger: #ff453a;
+    --shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+body {
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    "Microsoft YaHei", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--label);
+  -webkit-font-smoothing: antialiased;
+}
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+}
+svg {
+  flex: none;
+  display: block;
+}
+
+/* 滚动条：更像系统（细、半透明，悬停加深） */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--fill-2);
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--label-3);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ---------- 按钮 ---------- */
+.btn {
+  appearance: none;
+  border: 0;
+  border-radius: var(--r-ctl);
+  min-height: 36px;
+  padding: 0 14px;
+  background: var(--fill);
+  color: var(--label);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.15s, opacity 0.15s, transform 0.06s;
+}
+.btn:hover {
+  background: var(--fill-2);
+}
+.btn:active {
+  transform: scale(0.985);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  transform: none;
+}
+.btn.block {
+  width: 100%;
+}
+.btn.prominent {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.btn.prominent:hover {
+  filter: brightness(1.06);
+}
+.btn.destructive {
+  background: transparent;
+  color: var(--danger);
+}
+.btn.destructive:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.btn.plain {
+  background: transparent;
+}
+.btn.plain:hover {
+  background: var(--fill);
+}
+.btn.icon {
+  width: 36px;
+  padding: 0;
+  background: transparent;
+}
+.btn.icon:hover {
+  background: var(--fill);
+}
+
+/* ---------- 分段控件 ---------- */
+.seg {
+  display: inline-flex;
+  background: var(--fill);
+  border-radius: var(--r-ctl);
+  padding: 2px;
+}
+.seg button {
+  border: 0;
+  background: transparent;
+  color: var(--label);
+  min-height: 30px;
+  padding: 0 13px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.seg button.active {
+  background: var(--card);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+  font-weight: 600;
+}
+
+/* ---------- 芯片（筛选） ---------- */
+.chip {
+  border: 0;
+  background: var(--fill);
+  color: var(--label-2);
+  border-radius: var(--r-pill);
+  min-height: 30px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+.chip:hover {
+  color: var(--label);
+}
+.chip.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---------- 输入 ---------- */
+.field {
+  background: var(--fill);
+  border: 0;
+  border-radius: var(--r-ctl);
+  color: var(--label);
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+  color-scheme: light dark;
+}
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--fill);
+  border-radius: var(--r-ctl);
+  min-height: 36px;
+  padding: 0 11px;
+  color: var(--label-2);
+  flex: 1;
+  min-width: 170px;
+}
+.search input {
+  flex: 1;
+  background: none;
+  border: 0;
+  outline: 0;
+  color: var(--label);
+  font-size: 14px;
+}
+.search input::placeholder {
+  color: var(--label-3);
+}
+
+/* ---------- switch ---------- */
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--label-2);
+}
+.switch .track {
+  width: 44px;
+  height: 27px;
+  border-radius: 16px;
+  background: var(--fill-2);
+  position: relative;
+  flex: none;
+  transition: background 0.2s;
+}
+.switch .track i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 23px;
+  height: 23px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.28);
+  transition: left 0.2s;
+}
+.switch.on .track {
+  background: var(--accent);
+}
+.switch.on .track i {
+  left: 19px;
+}
+
+/* ---------- 进度条 ---------- */
+.progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--fill);
+  overflow: hidden;
+}
+.progress i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+
+/* ---------- 侧栏条目 ---------- */
+.action {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: var(--r-ctl);
+  font-size: 14px;
+  color: var(--label);
+  cursor: pointer;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  text-align: left;
+}
+.action:hover {
+  background: var(--fill);
+}
+.action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.action svg {
+  color: var(--label-2);
+}
+
+/* ---------- 卡片 ---------- */
+.card {
+  background: var(--card);
+  border: 1px solid var(--separator);
+  border-radius: var(--r-card);
+  padding: 12px;
+}
+
+.muted {
+  color: var(--label-2);
+}
+.spacer {
+  flex: 1;
+}
+
+/* ---------- 动效尊重系统设置 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

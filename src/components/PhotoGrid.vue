@@ -201,7 +201,7 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
           class="date-header"
           :style="{ transform: `translateY(${row.y}px)`, height: row.h + 'px' }"
         >
-          {{ row.label }}
+          {{ row.label }}<span>· {{ row.count }} 张</span>
         </div>
         <template v-else-if="row.type === 'tiles'">
           <div
@@ -245,7 +245,7 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
   inset: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  background: #111;
+  background: var(--bg);
 }
 .canvas {
   position: relative;
@@ -257,21 +257,36 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
   left: 0;
   width: 100%;
   display: flex;
-  align-items: center;
-  padding: 0 12px;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 16px;
   box-sizing: border-box;
-  color: #ddd;
-  font-weight: 600;
-  background: #111;
+  color: var(--label);
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  background: linear-gradient(180deg, var(--bg) 72%, transparent);
   z-index: 1;
+}
+.date-header span {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--label-2);
 }
 .tile {
   position: absolute;
   top: 0;
   left: 0;
   overflow: hidden;
-  background: #1c1c1c;
+  border-radius: var(--r-tile);
+  background: var(--tile);
   cursor: pointer;
+  transition: transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.16s;
+}
+.tile:hover {
+  transform: scale(1.03);
+  box-shadow: var(--shadow);
+  z-index: 2;
 }
 .tile img {
   width: 100%;
@@ -280,21 +295,26 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
   display: block;
 }
 .tile.selected {
-  outline: 3px solid #4af;
+  outline: 3px solid var(--accent);
   outline-offset: -3px;
+}
+.tile.selected:hover {
+  transform: none;
 }
 .check {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 22px;
-  height: 22px;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
-  background: #4af;
+  background: var(--accent);
   color: #fff;
   font-size: 14px;
-  line-height: 22px;
+  line-height: 24px;
   text-align: center;
+  border: 2px solid #fff;
+  box-sizing: border-box;
 }
 .load-footer {
   position: absolute;
@@ -305,6 +325,7 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #888;
+  color: var(--label-2);
+  font-size: 13px;
 }
 </style>

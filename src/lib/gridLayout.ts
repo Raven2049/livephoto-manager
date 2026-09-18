@@ -9,7 +9,7 @@ export interface TileCell {
 }
 
 export type GridRow =
-  | { type: "header"; key: string; label: string; y: number; h: number }
+  | { type: "header"; key: string; label: string; count: number; y: number; h: number }
   | { type: "tiles"; key: string; y: number; h: number; cells: TileCell[] }
   | { type: "footer"; key: "footer"; y: number; h: number };
 
@@ -51,7 +51,14 @@ export function buildLayout(
   for (const g of groups) {
     groupStartY.push(y);
     groupStartIndex.push(index);
-    rows.push({ type: "header", key: g.key, label: g.label, y, h: headerH });
+    rows.push({
+      type: "header",
+      key: g.key,
+      label: g.label,
+      count: g.assets.length,
+      y,
+      h: headerH,
+    });
     y += headerH;
 
     const nRows = Math.ceil(g.assets.length / cols);
