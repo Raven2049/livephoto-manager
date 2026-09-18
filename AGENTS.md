@@ -23,7 +23,8 @@
 | 导入实测 | `docs/superpowers/notes/2026-09-17-import-smoke.md` | 阶段 3 实机导入实测（含一个严重 bug 的发现与修复） |
 | 计划 5 | `docs/superpowers/plans/2026-09-17-stage4-thumbnails.md` | 阶段 4：ffmpeg 集成 + 缩略图（8 个任务，**已完成**） |
 | 缩略图实测 | `docs/superpowers/notes/2026-09-17-thumbs-smoke.md` | 阶段 4 缩略图实测（含 `VT_DATE` 与 `-filter_complex` 两个修复） |
-| 计划 6 | `docs/superpowers/plans/2026-09-18-stage5-previews.md` | 阶段 5：预览片 + 悬停播放（**后端已实现，前端待做**，见「进行中」） |
+| 计划 6 | `docs/superpowers/plans/2026-09-18-stage5-previews.md` | 阶段 5：预览片 + 悬停播放（**已完成**） |
+| 预览实测 | `docs/superpowers/notes/2026-09-18-preview-smoke.md` | 阶段 5 合成库实测（**本轮用合成素材，真实 iPhone 素材待补**） |
 | 计划 7+ | 尚未编写 | UUID 校验 + 异常分类 + 诊断 + iCloud 检测；浏览体验与 UI；打包分发 |
 
 ## 当前进度
@@ -36,48 +37,31 @@
 - [x] **计划 3（阶段 2 SQLite 索引 + 库目录管理）编写并实现完成**：打开库 → 重建索引 → 统计/网格均实测符合预期
 - [x] **计划 4（阶段 3 设备导入）编写并实现完成**：实机 60/60 文件传输成功、字节数校验零错位
 - [x] **计划 5（阶段 4 ffmpeg 集成 + 缩略图）编写并实现完成**：HEIC→512px WebP、导入时生成、状态推进到 `transcoded`、网格显示缩略图（已用户确认）；顺带修复 `taken_at`（`VT_DATE` 解析）
-- [ ] 计划 6+ 尚未编写
+- [x] **计划 6（阶段 5 预览片 + 悬停播放）编写并实现完成**：后端 `ensure_preview` + 前端单例 `<video>`；
+  悬停播放、快速划过不触发、滚动/缩放不触发、DevTools 确认只有一个 `<video>`，均已实测通过
+- [ ] 计划 7+ 尚未编写
 
-**下一步：计划 6（阶段 5：预览片 + 悬停播放）——后端已实现，前端未做，见下方「进行中」。**
+**下一步：编写计划 7（UUID 校验 + 异常分类 + 诊断报告 + iCloud 检测，对应设计 §6.4 / §10）。**
 
-## 进行中：计划 6（阶段 5）——后端 + 前端均已完成，只剩实测
+### 需要真机才能补的验证（不阻塞开发）
 
-文档：`docs/superpowers/plans/2026-09-18-stage5-previews.md`。两个取舍已定并写入设计 §7.1/§7.3：
-预览片**截前 6 秒**；并发限流（最多 2）**放在前端**。
+原开发机的库（`D:\图片\Pictures\iPhone`）不在当前机器上，本轮阶段 5 实测用的是
+**ffmpeg 合成的库**（`F:\project\github\livephoto-testlib`，在仓库之外）。因此以下三条待补：
 
-**已完成（后端）**：
-- `ffmpeg::preview_args()`（480p H.264、`-an`、`-t 6`、`faststart`、`-filter_complex`）+ 单测
-- `thumb::preview_file_name()` / `make_preview_for_movie()`（内容哈希命名、已存在复用）+ 单测
-- `db::asset_movie_path()` / `set_preview_path()` + 单测
-- `commands::ensure_preview(asset_id)` 并已注册（`commands.rs:208`、`lib.rs:63`）
+1. **真实 iPhone HEIC 的多流怪癖未复验** —— `real_thumb_smoke` 只跑了 MOV 路径
+2. **真实实况照片的预览片体积（设计预期 100~400 KB）与转码耗时未测** —— 合成素材太小，测不出有意义的数字
+3. **真实素材下的悬停手感未测** —— 合成素材转码近乎瞬时，真实素材首次悬停可能要等数百毫秒
 
-**已完成（前端 Task 4）**：
-- `src/composables/usePreview.ts`（新增）：单例 video 引用、350 ms 防抖、滚动/缩放后 300 ms 抑制、
-  最多 2 个在飞、等 `canplay` 再显示避免黑底、token 机制丢弃过期异步结果
-- `src/components/PhotoGrid.vue`：加 `assets` prop（与 `items` 下标一一对应）+ `hover` / `hover-out` / `suppress` 事件
-- `src/App.vue`：挂**唯一一个** `<video>`（用 `v-show` 而非 `v-if`，避免每次悬停销毁重建丢失解码器状态）、
-  hover 时按 `rect` 转换到 `main` 坐标系定位、加载指示点、`main` 加 `overflow: hidden` 裁掉滚出视口的预览
+插上 iPhone 走一次真实导入即可同时补上这三条。
 
-**已验证**：
-- `cargo test --workspace` → liveporter 41 通过 / probe 25 通过
-- `cargo clippy --workspace --all-targets -- -D warnings` 干净；`cargo fmt --all --check` 干净
-- **真 ffmpeg 冒烟已跑过**（原先没跑）：用 ffmpeg 合成 HEVC MOV 作输入，
-  `real_preview_smoke` 与 `real_thumb_smoke` 均通过。产物核对：6.00 秒、h264(High)/avc1、
-  480×854、无音轨、`moov`(36) 在 `mdat`(2577) 之前（faststart 生效）
-- `npm run build`（含 `vue-tsc --noEmit`）通过
+## 阶段 5 关键实现要点（改动前先看）
 
-**未完成（接着做）**：
-1. **Task 5 实测**（需要真人用鼠标悬停，尚未做）：悬停 ≥350 ms 播放；快速划过不触发；
-   滚动/缩放不触发；DevTools 确认**只有一个** `<video>`；`previews/` 出现 `<hash>.mp4`
-2. **Task 6 收尾验证** 与 `notes/2026-09-18-preview-smoke.md`
-
-**Task 5 的前提**：需要先有一个含实况/视频的库。当前开发机上**没有任何库**，也没插手机。
-两条路：插 iPhone 走真实导入（顺带复验 HEIC 多流），或用 ffmpeg 合成一个最小库目录直接开 `npm run tauri dev`。
-
-**注意**：`previews/` 与 `thumbs/` 都在库内、走 `lpm://`（库根已作为允许根）；不要给瓦片各放 `<video>`。
-
-**一个尚未复验的点**：`real_thumb_smoke` 只跑了 MOV 路径。真实 iPhone HEIC 的**多流怪癖**
-（需 `-filter_complex` 而非 `-vf`，见 `notes/2026-09-17-thumbs-smoke.md`）要等插真机时才能复验。
+- **全局只有一个 `<video>`**，用 `v-show` 而**不是** `v-if` 控制可见性。用 `v-if` 会让元素随每次悬停
+  销毁重建，丢失解码器状态，等于每个格子都换一个新 video——正好毁掉这个设计的全部意义。
+- 预览片由浏览界面**按需生成**（`ensure_preview`），**不要**把它塞回导入管道。
+- 预览片与缩略图都用**内容哈希**命名，内容相同的条目自动复用同一个文件（实测生效）。
+- `previews/` 与 `thumbs/` 都在库内、走 `lpm://`（库根已作为允许根）。
+- 前端有 `token` 机制丢弃过期的异步结果：悬停 A 未完成就切到 B 时，A 的结果不能覆盖 B 的画面。
 
 **计划 4 遗留（动手前必读 `notes/2026-09-17-import-smoke.md`）：**
 - **iPhone 必须设为「保留原件」**：设置 → 照片 → 「传输到 Mac 或 PC」= **保留原件（Keep Originals）**。若设为「自动」，iOS 会即席把 HEIC 转 JPG、处理视频，导致传输慢约 17 倍（1.65 → 28.6 MB/s）且格式被转码。**产品应检测并提示**（信号：设备上静态图全是 `.JPG`、无 `.HEIC`）。改完需**拔插重连**才生效。
@@ -144,7 +128,9 @@
   `C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um\PortableDevice.h`
 - ffmpeg `9.0.1-full_build`（gyan.dev），路径：
   `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build\bin\ffmpeg.exe`
-- 跑冒烟测试时设 `$env:LIVEPORTER_FFMPEG` 指向上面这个路径
+- 跑冒烟测试**和** `npm run tauri dev` 前都必须设 `$env:LIVEPORTER_FFMPEG` 指向上面这个路径，
+  否则生成缩略图/预览片会报「未找到 ffmpeg.exe」（`ffmpeg::find_ffmpeg` 只查环境变量、
+  主程序同目录、同目录 `resources/`，**不查 PATH**）
 
 **注意**：阶段 4 的实测记录用的是 `9.0.1-**essentials**_build`，本机装的是 `full_build`（超集）。
 两者都含 `libwebp` / `libx264` / `hevc`，已实测冒烟通过。
