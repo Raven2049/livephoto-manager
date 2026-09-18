@@ -5,6 +5,7 @@ mod ffmpeg;
 mod importer;
 mod indexer;
 mod library;
+mod livephoto;
 mod pairing;
 mod protocol;
 mod state;
