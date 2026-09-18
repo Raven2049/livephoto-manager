@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LivePorter — 方案 A · 侧边栏（深色）</title>
+<style>
+  :root{
+    --bg:#0e0f12; --panel:#16181d; --panel2:#1d2026; --elev:#23272f;
+    --line:#2a2e36; --text:#e7e9ee; --muted:#9aa1ad;
+    --accent:#5b8cff; --accent2:#3f6fe0; --danger:#f85149;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    font:14px/1.45 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;
+  }
+  svg{flex:none}
+  .app{display:grid;grid-template-columns:268px 1fr;height:100vh}
+
+  /* ---------- sidebar ---------- */
+  .sidebar{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+  .brand{display:flex;align-items:center;gap:11px;padding:16px}
+  .brand .logo{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,#5b8cff,#9b6bff);display:grid;place-items:center;font-weight:700;box-shadow:0 4px 14px rgba(91,140,255,.35)}
+  .brand h1{font-size:15px;margin:0;font-weight:650;letter-spacing:.2px}
+  .brand .sub{font-size:11px;color:var(--muted);margin-top:1px}
+  .sec{padding:4px 14px 14px}
+  .sec-title{font-size:11px;letter-spacing:.06em;color:var(--muted);margin:10px 2px 7px;font-weight:600}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:var(--radius);padding:12px}
+  .libpath{font-size:12px;color:var(--muted);word-break:break-all;margin-bottom:10px;display:flex;gap:7px;align-items:flex-start;line-height:1.35}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:11px}
+  .stat{background:var(--elev);border-radius:9px;padding:7px 8px}
+  .stat b{display:block;font-size:15px;font-weight:650}
+  .stat span{font-size:10.5px;color:var(--muted)}
+
+  .btn{appearance:none;border:1px solid var(--line);background:var(--elev);color:var(--text);
+       border-radius:9px;padding:9px 12px;font-size:13px;cursor:pointer;
+       display:inline-flex;align-items:center;justify-content:center;gap:7px;width:100%;transition:.13s}
+  .btn:hover{border-color:#3a4150;background:#282d36}
+  .btn.primary{background:linear-gradient(180deg,var(--accent),var(--accent2));border-color:transparent;font-weight:600}
+  .btn.primary:hover{filter:brightness(1.07)}
+  .btn.ghost{background:transparent}
+  .btn.danger{border-color:rgba(248,81,73,.45);color:#ffb4b1}
+  .btn.danger:hover{background:rgba(248,81,73,.13)}
+
+  .switch{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--muted);margin-top:10px;cursor:pointer}
+  .switch .track{width:34px;height:19px;border-radius:10px;background:#333945;position:relative;flex:none;transition:.15s}
+  .switch .track i{position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:#8b93a1;transition:.15s}
+  .switch.on .track{background:linear-gradient(90deg,var(--accent),#7a6bff)}
+  .switch.on .track i{left:17px;background:#fff}
+
+  .progress{height:6px;border-radius:4px;background:#2b303a;overflow:hidden;margin-top:12px}
+  .progress i{display:block;height:100%;width:42%;background:linear-gradient(90deg,var(--accent),#9b6bff);border-radius:4px}
+  .ptext{font-size:11px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between}
+
+  .action{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;color:#c9cfda;cursor:pointer;font-size:13px}
+  .action:hover{background:var(--elev);color:#fff}
+  .action svg{opacity:.8}
+  .spacer{flex:1}
+  .sidefoot{padding:12px 14px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}
+
+  /* ---------- main ---------- */
+  .main{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
+  .topbar{padding:12px 16px;display:flex;gap:9px;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--line);background:var(--panel)}
+  .search{flex:1;min-width:190px;display:flex;align-items:center;gap:9px;background:#12141a;border:1px solid var(--line);border-radius:10px;padding:9px 12px;color:var(--muted)}
+  .search:focus-within{border-color:rgba(91,140,255,.6);box-shadow:0 0 0 3px rgba(91,140,255,.12)}
+  .search input{background:none;border:0;outline:0;color:var(--text);font-size:13px;width:100%}
+  .seg{display:flex;background:#12141a;border:1px solid var(--line);border-radius:10px;padding:3px}
+  .seg button{border:0;background:none;color:var(--muted);padding:6px 13px;border-radius:7px;font-size:12.5px;cursor:pointer}
+  .seg button.active{background:var(--elev);color:#fff}
+  .date{background:#12141a;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:8px 9px;font-size:12.5px;color-scheme:dark}
+  .chip{border:1px solid var(--line);background:#181b21;color:var(--muted);border-radius:999px;padding:6px 11px;font-size:12px;cursor:pointer}
+  .chip:hover{color:#d5dae3}
+  .chip.active{background:rgba(91,140,255,.16);border-color:rgba(91,140,255,.5);color:#c3d4ff}
+  .status{margin-left:auto;color:var(--muted);font-size:12px}
+
+  .content{position:relative;overflow:auto;flex:1;padding:0 16px 26px}
+  .day{position:sticky;top:0;z-index:3;padding:15px 2px 8px;font-weight:650;font-size:14px;
+       background:linear-gradient(180deg,rgba(14,15,18,.97),rgba(14,15,18,.75));backdrop-filter:blur(6px)}
+  .day span{color:var(--muted);font-weight:400;font-size:12px;margin-left:8px}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .tile{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;cursor:pointer;background:#1c1f25;
+        transition:transform .12s ease,box-shadow .12s ease}
+  .tile:hover{transform:scale(1.035);box-shadow:0 10px 26px rgba(0,0,0,.55);z-index:2}
+  .tile .ph{position:absolute;inset:0}
+  .tile .badge{position:absolute;left:7px;top:7px;background:rgba(0,0,0,.5);border-radius:6px;padding:2px 7px;
+       font-size:10.5px;display:flex;gap:4px;align-items:center;backdrop-filter:blur(4px)}
+  .tile .check{position:absolute;right:7px;top:7px;width:21px;height:21px;border-radius:50%;background:var(--accent);
+       display:grid;place-items:center;font-size:12px;border:2px solid #fff;opacity:0;transition:.12s}
+  .tile.sel .check{opacity:1}
+  .tile.sel{outline:3px solid var(--accent);outline-offset:-3px}
+  .g1{background:linear-gradient(135deg,#243a5e,#5b8cff)} .g2{background:linear-gradient(135deg,#5e3a24,#e0894a)}
+  .g3{background:linear-gradient(135deg,#1f5238,#4dd08a)} .g4{background:linear-gradient(135deg,#4a245e,#b06bff)}
+  .g5{background:linear-gradient(135deg,#5e2433,#ff6b8a)} .g6{background:linear-gradient(135deg,#24485e,#4ac7e0)}
+  .g7{background:linear-gradient(135deg,#3d3d2a,#c7c46b)} .g8{background:linear-gradient(135deg,#2a3d4a,#7fa6c4)}
+
+  /* ---------- selection bar ---------- */
+  .selbar{position:fixed;left:290px;bottom:22px;transform:translateX(-50%);
+       background:#1b1f27;border:1px solid #333a46;border-radius:14px;box-shadow:0 16px 44px rgba(0,0,0,.6);
+       padding:8px 10px;display:flex;gap:8px;align-items:center;z-index:10}
+  .selbar .n{font-size:13px;padding:0 8px;color:var(--muted)}
+  .selbar .n b{color:var(--text)}
+  .selbar .btn{width:auto;padding:7px 13px}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">L</div>
+      <div><h1>LivePorter</h1><div class="sub">iPhone 实况照片搬运</div></div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">库</div>
+      <div class="card">
+        <div class="libpath">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          D:\图片\Pictures\iPhone
+        </div>
+        <button class="btn">打开库</button>
+        <div class="stats">
+          <div class="stat"><b>1,234</b><span>总数</span></div>
+          <div class="stat"><b>900</b><span>实况</span></div>
+          <div class="stat"><b>200</b><span>照片</span></div>
+          <div class="stat"><b>134</b><span>视频</span></div>
+          <div class="stat"><b>0</b><span>缺失</span></div>
+          <div class="stat"><b>3</b><span>异常</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">导入</div>
+      <button class="btn primary">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>
+        从 iPhone 导入
+      </button>
+      <div class="switch on"><span class="track"><i></i></span>原件可能不在手机</div>
+      <div class="progress"><i></i></div>
+      <div class="ptext"><span>导入中 412 / 1,234</span><span>28.6 MB/s</span></div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">维护</div>
+      <div class="action"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>重建索引</div>
+      <div class="action"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>生成缩略图</div>
+      <div class="action"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>校验标识</div>
+      <div class="action"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>导出诊断</div>
+    </div>
+
+    <div class="spacer"></div>
+    <div class="sidefoot">v1.0.0 · GPL-3.0 · ffmpeg 9.0.1</div>
+  </aside>
+
+  <section class="main">
+    <div class="topbar">
+      <div class="search">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input placeholder="搜索文件名">
+      </div>
+      <div class="seg">
+        <button class="active">全部</button><button>实况</button><button>照片</button><button>视频</button>
+      </div>
+      <input class="date" type="date" value="2024-01-01"><span style="color:var(--muted)">至</span><input class="date" type="date" value="2026-12-31">
+      <button class="chip active">正常</button><button class="chip">不一致</button><button class="chip">残缺</button><button class="chip">疑似副本</button>
+      <div class="status">已加载 1,234 · 5 列</div>
+    </div>
+
+    <div class="content">
+      <div class="day">2025年5月14日 星期三<span>· 36 张</span></div>
+      <div class="grid">
+        <div class="tile g1"><span class="badge">● 实况</span><span class="check">✓</span></div>
+        <div class="tile g2"></div>
+        <div class="tile g3"><span class="badge">▶ 00:04</span></div>
+        <div class="tile g4"></div>
+        <div class="tile g5"><span class="badge">● 实况</span></div>
+        <div class="tile g6"></div>
+        <div class="tile g7"></div>
+        <div class="tile g8"><span class="badge">● 实况</span><span class="check">✓</span></div>
+        <div class="tile g1"></div>
+        <div class="tile g2"><span class="badge">▶ 00:12</span></div>
+      </div>
+
+      <div class="day">2025年5月12日 星期一<span>· 24 张</span></div>
+      <div class="grid">
+        <div class="tile g3"></div>
+        <div class="tile g4"><span class="badge">● 实况</span></div>
+        <div class="tile g5"></div>
+        <div class="tile g6"></div>
+        <div class="tile g7"><span class="badge">▶ 00:07</span></div>
+        <div class="tile g8"></div>
+        <div class="tile g1"></div>
+        <div class="tile g2"><span class="badge">● 实况</span></div>
+        <div class="tile g3"></div>
+        <div class="tile g4"></div>
+      </div>
+
+      <div class="day">2025年4月28日 星期一<span>· 18 张</span></div>
+      <div class="grid">
+        <div class="tile g5"><span class="badge">● 实况</span></div>
+        <div class="tile g6"></div>
+        <div class="tile g7"></div>
+        <div class="tile g8"><span class="badge">● 实况</span></div>
+        <div class="tile g1"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="selbar">
+  <span class="n">已选 <b>3</b></span>
+  <button class="btn ghost">全选</button>
+  <button class="btn ghost">清除</button>
+  <button class="btn">导出</button>
+  <button class="btn danger">删除</button>
+</div>
+</body>
+</html>

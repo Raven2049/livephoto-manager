@@ -31,6 +31,8 @@
 | 实测记录 | `docs/superpowers/notes/2026-09-18-browse-smoke.md` | 阶段 7 自动化验证（GUI 交互实测待补） |
 | 计划 9 | `docs/superpowers/plans/2026-09-18-stage8-portable-packaging.md` | 阶段 8：打包分发（绿色版：组装脚本 + 裁剪 ffmpeg + README + 发布流程）（**已实现并验收**；仅剩实际发 GitHub Release） |
 | 打包实测 | `docs/superpowers/notes/2026-09-18-packaging-smoke.md` | 阶段 8 打包实测（no-bundle 产物、依赖、组装、启动） |
+| 计划 10 | `docs/superpowers/plans/2026-09-18-stage9-ui-redesign.md` | 阶段 9：界面改版（经典 HIG + 左右布局 + 跟随系统深浅）（**已实现**） |
+| 界面参考稿 | `docs/mockups/index.html` | 静态 HTML 参考稿 A/B/C/D（非构建产物） |
 
 ## 当前进度
 
@@ -74,6 +76,10 @@
   (b) 重扫产生重复行/「未知日期」→ `db::device_id_for_folder()` 让 indexer 复用已有设备行
 - [x] **Task 7** `docs/releasing.md`
 - 实测记录：`docs/superpowers/notes/2026-09-18-packaging-smoke.md`
+
+- [x] **计划 10（阶段 9 界面改版）实现完成**：原生 Vue+CSS，左侧栏 + 主区、跟随系统深浅、
+  toast/确认框/空状态/进度；按 `apple-hig` 经典 HIG，排除 iOS 26+ Liquid Glass（见「已定的关键约束」）。
+  验证：`vue-tsc`、`npm run build`、`tauri dev` 用户确认「看着还不错」
 
 **下一步：按 `docs/releasing.md` 做首次发布（打 tag + `gh release`）。可选后续：NSIS 安装包、代码签名。**
 
@@ -140,6 +146,12 @@
 - **图片和视频绝不走 Tauri IPC**，走自定义协议 `lpm://`
 - **配对依据**：先用主文件名快速配对，文件落地后再读 `ContentIdentifier` UUID 校验
 - **WPD 相关代码必须只读**（探测阶段尤其），计划里有专门的守卫测试
+- **UI 不使用 iOS 26+ 的 Liquid Glass 设计语言**（用户 2026-09-18 决定）。参考全局 skill
+  `apple-hig`（`~\.agents\skills\apple-hig`），但**明确跳过** Liquid Glass 相关段落：
+  `materials.md` 的 Liquid Glass 章节（只用 Standard Materials）、`color.md` 的 Liquid Glass Color、
+  `layout.md`/`sidebars.md`/`tab-bars.md` 的 Liquid Glass 浮层、`app-icons.md` 的 Icon Composer。
+  其余经典 HIG 照用（系统语义色、字号层级、8pt 栅格、同心圆角、标准材质毛玻璃、44pt 命中区、
+  Reduce Motion）。主题**跟随系统** `prefers-color-scheme`，不做应用内主题开关。
 
 ## 环境要求（每台开发机都需要）
 
@@ -170,14 +182,18 @@
 
 ## 需要安装的 skills（全局，不在仓库内）
 
-本项目的开发依赖以下 4 个 agent skill。它们装在用户级目录（Windows 上是 `~\.agents\skills\`），**换机器需要重装**：
+本项目的开发依赖以下 5 个 agent skill。它们装在用户级目录（Windows 上是 `~\.agents\skills\`），**换机器需要重装**：
 
 ```bash
 npx skills add apollographql/skills@rust-best-practices -g -y
 npx skills add wshobson/agents@rust-async-patterns -g -y
 npx skills add digitalsamba/claude-code-video-toolkit@ffmpeg -g -y
 npx skills add nodnarbnitram/claude-code-extensions@tauri-v2 -g -y
+npx skills add justinwetch/higagentskills@apple-hig -g -y
 ```
+
+其中 `apple-hig` 用于界面设计规范；**本项目只取其经典 HIG 部分，明确排除 iOS 26+ 的 Liquid Glass**
+（见「已定的关键约束」）。
 
 其中 `tauri-v2` 的来源仓库 star 数很少，**只当参考，不当事实来源**；Tauri 2 的 API 以官方文档为准。
 

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LivePorter 界面参考稿</title>
+<style>
+  body{margin:0;font:15px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:#0e0f12;color:#e7e9ee;padding:40px}
+  h1{font-size:22px;margin:0 0 6px}
+  p{color:#9aa1ad;margin:0 0 26px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;max-width:1040px}
+  a.card{display:block;text-decoration:none;color:inherit;background:#16181d;border:1px solid #2a2e36;border-radius:14px;overflow:hidden;transition:.15s}
+  a.card:hover{transform:translateY(-3px);border-color:#3a4150;box-shadow:0 16px 40px rgba(0,0,0,.5)}
+  .thumb{height:150px;display:grid;place-items:center;font-size:13px;border-bottom:1px solid #2a2e36}
+  .t1{background:linear-gradient(135deg,#182338,#0e0f12);color:#c3d4ff}
+  .t2{background:linear-gradient(135deg,#1a2430,#0e0f12);color:#c3d4ff}
+  .t3{background:linear-gradient(135deg,#e9eef6,#cfd8e6);color:#1d4ed8}
+  .t4{background:linear-gradient(90deg,#eef1f6 0 50%,#14161b 50% 100%);color:#1d4ed8}
+  .meta{padding:14px 16px}
+  .meta b{display:block;font-size:15px;margin-bottom:4px}
+  .meta span{font-size:12.5px;color:#9aa1ad}
+  .rec{display:inline-block;font-size:11px;background:rgba(91,140,255,.18);border:1px solid rgba(91,140,255,.5);color:#c3d4ff;border-radius:999px;padding:1px 8px;margin-left:6px}
+</style>
+</head>
+<body>
+  <h1>LivePorter 界面参考稿</h1>
+  <p>单文件、纯原生 CSS。方案 D 按 Apple HIG 规范（系统语义色 / 8pt 栅格 / 同心圆角 / 材质分层 / 44pt 命中区 / Reduced Motion）重做，并<strong>跟随系统深浅色自动切换</strong>。</p>
+  <div class="cards">
+    <a class="card" href="d-hig-auto.html">
+      <div class="thumb t4">左栏 + 主区 · 跟随系统</div>
+      <div class="meta"><b>方案 D · 左右布局 + 深浅自动<span class="rec">推荐 / 已按你选的</span></b><span>HIG 令牌；侧栏材质较实、工具栏浮在内容上；深浅随系统。</span></div>
+    </a>
+    <a class="card" href="a-sidebar-dark.html">
+      <div class="thumb t1">侧边栏 · 深色</div>
+      <div class="meta"><b>方案 A · 侧边栏深色</b><span>较早的深色稿，仅布局参考。</span></div>
+    </a>
+    <a class="card" href="b-topbar-dark.html">
+      <div class="thumb t2">顶栏 · 深色</div>
+      <div class="meta"><b>方案 B · 顶栏深色</b><span>顶部结构（未选），保留备查。</span></div>
+    </a>
+    <a class="card" href="c-sidebar-light.html">
+      <div class="thumb t3">侧边栏 · 浅色</div>
+      <div class="meta"><b>方案 C · 侧边栏浅色</b><span>浅色稿，其配色已并入 D 的浅色模式。</span></div>
+    </a>
+  </div>
+</body>
+</html>

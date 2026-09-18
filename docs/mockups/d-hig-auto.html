@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LivePorter — 方案 D · 左右布局 · 跟随系统深浅（HIG）</title>
+<style>
+  /* ===== HIG 语义色（浅色） ===== */
+  :root{
+    --bg:#F2F2F7;                 /* systemGroupedBackground */
+    --elev:#FFFFFF;               /* secondarySystemGroupedBackground */
+    --card:#FFFFFF;
+    --tile:#E5E5EA;               /* systemGray5 */
+    --material:rgba(255,255,255,.72);   /* regular material */
+    --material-strong:rgba(249,249,249,.9); /* sidebar: more opaque */
+    --fill:rgba(120,120,128,.12); /* systemFill */
+    --fill-2:rgba(120,120,128,.2);
+    --label:rgba(0,0,0,.85);
+    --label-2:rgba(60,60,67,.6);  /* secondaryLabel */
+    --label-3:rgba(60,60,67,.3);  /* tertiaryLabel */
+    --separator:rgba(60,60,67,.29);
+    --accent:#0088FF;             /* systemBlue light */
+    --on-accent:#FFFFFF;
+    --danger:#FF3B30;
+    --shadow:0 10px 30px rgba(0,0,0,.10);
+    --r-card:16px; --r-tile:12px; --r-ctl:10px; --r-pill:999px;
+    --sp:8px;
+  }
+  /* ===== HIG 语义色（深色，跟随系统） ===== */
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#000000;               /* base background */
+      --elev:#1C1C1E;             /* elevated background */
+      --card:#1C1C1E;
+      --tile:#2C2C2E;
+      --material:rgba(28,28,30,.72);
+      --material-strong:rgba(28,28,30,.9);
+      --fill:rgba(120,120,128,.24);
+      --fill-2:rgba(120,120,128,.36);
+      --label:rgba(255,255,255,.9);
+      --label-2:rgba(235,235,245,.6);
+      --label-3:rgba(235,235,245,.3);
+      --separator:rgba(84,84,88,.65);
+      --accent:#0091FF;           /* systemBlue dark */
+      --danger:#FF453A;
+      --shadow:0 12px 34px rgba(0,0,0,.55);
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    font:15px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    background:var(--bg);color:var(--label);
+    -webkit-font-smoothing:antialiased;
+  }
+  svg{flex:none;display:block}
+  button{font:inherit;color:inherit}
+
+  .app{display:grid;grid-template-columns:260px 1fr;height:100vh}
+
+  /* ===== 侧栏（材质较实、层次最高） ===== */
+  .sidebar{
+    background:var(--material-strong);border-right:1px solid var(--separator);
+    backdrop-filter:blur(24px) saturate(160%);
+    display:flex;flex-direction:column;min-height:0;
+  }
+  .brand{display:flex;align-items:center;gap:11px;padding:18px 16px 12px}
+  .logo{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,var(--accent),#7a6bff);
+    display:grid;place-items:center;font-weight:700;color:#fff;font-size:15px}
+  .brand h1{font-size:15px;font-weight:650;margin:0;letter-spacing:-.01em}
+  .brand .sub{font-size:12px;color:var(--label-2)}
+  .sec{padding:4px 12px 12px}
+  .sec-title{font-size:11px;font-weight:600;color:var(--label-3);text-transform:uppercase;letter-spacing:.05em;margin:8px 6px 6px}
+
+  .card{background:var(--card);border:1px solid var(--separator);border-radius:var(--r-card);padding:12px}
+  .libpath{display:flex;gap:7px;align-items:flex-start;font-size:12px;color:var(--label-2);word-break:break-all;line-height:1.35}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+  .stat{background:var(--fill);border-radius:var(--r-ctl);padding:7px 8px}
+  .stat b{display:block;font-size:16px;font-weight:650;letter-spacing:-.02em}
+  .stat span{font-size:11px;color:var(--label-2)}
+  .stat.warn b{color:var(--danger)}
+
+  .btn{
+    appearance:none;border:0;border-radius:var(--r-ctl);min-height:36px;padding:0 14px;
+    background:var(--fill);color:var(--label);
+    display:inline-flex;align-items:center;justify-content:center;gap:7px;width:100%;
+    cursor:pointer;font-size:14px;font-weight:500;transition:background .15s,opacity .15s,transform .06s;
+  }
+  .btn:hover{background:var(--fill-2)}
+  .btn:active{transform:scale(.985)}
+  .btn:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:2px}
+  .btn.prominent{background:var(--accent);color:var(--on-accent);font-weight:600}
+  .btn.prominent:hover{filter:brightness(1.06)}
+  .btn.destructive{background:transparent;color:var(--danger)}
+  .btn.destructive:hover{background:color-mix(in srgb,var(--danger) 14%,transparent)}
+  .btn.plain{background:transparent}
+  .btn.plain:hover{background:var(--fill)}
+
+  /* switch（44pt 命中区） */
+  .switch{display:flex;align-items:center;gap:10px;min-height:44px;margin-top:4px;cursor:pointer;font-size:13px;color:var(--label-2)}
+  .track{width:44px;height:27px;border-radius:16px;background:var(--fill-2);position:relative;flex:none;transition:background .2s}
+  .track i{position:absolute;top:2px;left:2px;width:23px;height:23px;border-radius:50%;background:#fff;box-shadow:0 2px 5px rgba(0,0,0,.28);transition:left .2s}
+  .switch.on .track{background:var(--accent)}
+  .switch.on .track i{left:19px}
+
+  .progress{height:4px;border-radius:2px;background:var(--fill);overflow:hidden;margin-top:8px}
+  .progress i{display:block;height:100%;width:42%;background:var(--accent);border-radius:2px}
+  .ptext{font-size:12px;color:var(--label-2);margin-top:6px;display:flex;justify-content:space-between}
+
+  .action{display:flex;align-items:center;gap:11px;min-height:40px;padding:0 10px;border-radius:var(--r-ctl);font-size:14px;color:var(--label);cursor:pointer}
+  .action:hover{background:var(--fill)}
+  .action svg{color:var(--label-2)}
+  .spacer{flex:1}
+  .sidefoot{padding:12px 16px;border-top:1px solid var(--separator);font-size:11px;color:var(--label-3)}
+
+  /* ===== 主区 ===== */
+  .main{display:flex;flex-direction:column;min-width:0;min-height:0}
+  /* 工具栏：材质浮在内容之上 */
+  .toolbar{
+    position:sticky;top:0;z-index:5;
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    padding:10px 16px;background:var(--material);backdrop-filter:blur(24px) saturate(160%);
+    border-bottom:1px solid var(--separator);
+  }
+  .title{font-size:17px;font-weight:650;letter-spacing:-.01em;margin-right:4px}
+  .search{
+    flex:1;min-width:180px;display:flex;align-items:center;gap:8px;
+    background:var(--fill);border-radius:var(--r-ctl);min-height:36px;padding:0 11px;color:var(--label-2);
+  }
+  .search input{flex:1;background:none;border:0;outline:0;color:var(--label);font-size:14px}
+  .search input::placeholder{color:var(--label-3)}
+
+  .seg{display:inline-flex;background:var(--fill);border-radius:var(--r-ctl);padding:2px}
+  .seg button{border:0;background:transparent;color:var(--label);min-height:30px;padding:0 13px;border-radius:8px;font-size:13px;cursor:pointer}
+  .seg button.active{background:var(--card);box-shadow:0 1px 3px rgba(0,0,0,.14);font-weight:600}
+  .seg button:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:1px}
+
+  .chip{border:0;background:var(--fill);color:var(--label-2);border-radius:var(--r-pill);min-height:30px;padding:0 12px;font-size:13px;cursor:pointer}
+  .chip.active{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font-weight:600}
+  .date{background:var(--fill);border:0;border-radius:var(--r-ctl);color:var(--label);min-height:32px;padding:0 9px;font-size:13px;color-scheme:light dark}
+  .status{margin-left:auto;color:var(--label-2);font-size:12px}
+
+  /* 内容区：整块可滚，分组标题用 scroll edge 效果浮起 */
+  .content{position:relative;overflow:auto;flex:1;min-height:0;padding:0 16px 96px}
+  .day{
+    position:sticky;top:0;z-index:3;
+    display:flex;align-items:baseline;gap:8px;
+    /* 同心：标题区与卡片同 16 圆角节奏 */
+    padding:18px 4px 8px;font-size:17px;font-weight:650;letter-spacing:-.01em;
+    background:linear-gradient(180deg,var(--bg) 70%,color-mix(in srgb,var(--bg) 0%,transparent));
+    backdrop-filter:blur(6px);
+  }
+  .day span{font-size:13px;font-weight:400;color:var(--label-2)}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .tile{
+    position:relative;aspect-ratio:1;border-radius:var(--r-tile);overflow:hidden;cursor:pointer;background:var(--tile);
+    transition:transform .16s cubic-bezier(.2,.8,.2,1),box-shadow .16s;
+  }
+  .tile:hover{transform:scale(1.03);box-shadow:var(--shadow);z-index:2}
+  .tile:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+  .tile .ph{position:absolute;inset:0}
+  /* 徽标：同心圆角 = 外 12 - 内边距 6 */
+  .tile .badge{position:absolute;left:6px;top:6px;border-radius:6px;padding:3px 7px;font-size:11px;
+    background:rgba(0,0,0,.55);color:#fff;display:flex;gap:4px;align-items:center;backdrop-filter:blur(6px)}
+  .tile .check{position:absolute;right:6px;top:6px;width:24px;height:24px;border-radius:50%;
+    background:var(--accent);color:#fff;display:grid;place-items:center;border:2px solid #fff;opacity:0;transition:opacity .12s}
+  .tile.sel .check{opacity:1}
+  .tile.sel{outline:3px solid var(--accent);outline-offset:-3px}
+
+  /* 选中操作条：浮层（材质） */
+  .selbar{
+    position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+    display:flex;align-items:center;gap:8px;padding:8px 10px;
+    background:var(--material);backdrop-filter:blur(24px) saturate(160%);
+    border:1px solid var(--separator);border-radius:16px;box-shadow:var(--shadow);z-index:10;
+  }
+  .selbar .n{font-size:13px;color:var(--label-2);padding:0 6px}
+  .selbar .n b{color:var(--label)}
+  .selbar .btn{width:auto;min-height:34px;padding:0 13px;background:transparent}
+  .selbar .btn:hover{background:var(--fill)}
+  .selbar .btn.prominent{background:var(--accent);color:var(--on-accent)}
+
+  /* 图像占位：浅/深各一套，避免深色下过亮（HIG: 深色模式压暗白底图） */
+  .g1{background:linear-gradient(135deg,#cfe0ff,#8fb6ff)} .g2{background:linear-gradient(135deg,#ffe0c8,#f2b184)}
+  .g3{background:linear-gradient(135deg,#cdf0dd,#7fca9d)} .g4{background:linear-gradient(135deg,#e4d4ff,#b79cf0)}
+  .g5{background:linear-gradient(135deg,#ffd4dc,#f290a6)} .g6{background:linear-gradient(135deg,#cdeaf5,#8fc8de)}
+  .g7{background:linear-gradient(135deg,#eeecc2,#d0cb84)} .g8{background:linear-gradient(135deg,#d6e2ec,#a3bbc9)}
+  @media (prefers-color-scheme: dark){
+    .g1{background:linear-gradient(135deg,#243a5e,#4a6fa5)} .g2{background:linear-gradient(135deg,#5e3a24,#a56f4a)}
+    .g3{background:linear-gradient(135deg,#1f5238,#3f8a63)} .g4{background:linear-gradient(135deg,#4a245e,#7a5aa5)}
+    .g5{background:linear-gradient(135deg,#5e2433,#a54a5e)} .g6{background:linear-gradient(135deg,#24485e,#3f7f96)}
+    .g7{background:linear-gradient(135deg,#3d3d2a,#8f8a4a)} .g8{background:linear-gradient(135deg,#2a3d4a,#5f7d8f)}
+  }
+
+  /* 动效尊重系统设置 */
+  @media (prefers-reduced-motion: reduce){
+    *{transition:none!important;animation:none!important}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">L</div>
+      <div><h1>LivePorter</h1><div class="sub">iPhone 实况照片搬运</div></div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">资料库</div>
+      <div class="card">
+        <div class="libpath">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          D:\图片\Pictures\iPhone
+        </div>
+        <button class="btn" style="margin-top:10px">打开资料库…</button>
+        <div class="stats">
+          <div class="stat"><b>1,234</b><span>总数</span></div>
+          <div class="stat"><b>900</b><span>实况</span></div>
+          <div class="stat"><b>200</b><span>照片</span></div>
+          <div class="stat"><b>134</b><span>视频</span></div>
+          <div class="stat"><b>0</b><span>缺失</span></div>
+          <div class="stat warn"><b>3</b><span>异常</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">导入</div>
+      <button class="btn prominent">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="3"/><path d="M11 18.5h2"/></svg>
+        从 iPhone 导入
+      </button>
+      <div class="switch on"><span class="track"><i></i></span>原件可能不在手机</div>
+      <div class="progress"><i></i></div>
+      <div class="ptext"><span>导入中 412 / 1,234</span><span>28.6 MB/s</span></div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-title">维护</div>
+      <div class="action"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>重建索引</div>
+      <div class="action"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>生成缩略图</div>
+      <div class="action"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>校验标识</div>
+      <div class="action"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>导出诊断报告</div>
+    </div>
+
+    <div class="spacer"></div>
+    <div class="sidefoot">v1.0.0 · GPL-3.0 · ffmpeg 9.0.1</div>
+  </aside>
+
+  <section class="main">
+    <div class="toolbar">
+      <span class="title">资料库</span>
+      <div class="search">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input placeholder="搜索文件名">
+      </div>
+      <div class="seg"><button class="active">全部</button><button>实况</button><button>照片</button><button>视频</button></div>
+      <input class="date" type="date" value="2024-01-01"><span style="color:var(--label-3)">至</span><input class="date" type="date" value="2026-12-31">
+      <button class="chip active">正常</button><button class="chip">不一致</button><button class="chip">残缺</button><button class="chip">疑似副本</button>
+      <div class="status">已加载 1,234 · 5 列</div>
+    </div>
+
+    <div class="content">
+      <div class="day">2025年5月14日 星期三<span>· 36 张</span></div>
+      <div class="grid">
+        <div class="tile g1"><span class="badge">● 实况</span><span class="check">✓</span></div>
+        <div class="tile g2"></div>
+        <div class="tile g3"><span class="badge">▶ 00:04</span></div>
+        <div class="tile g4"></div>
+        <div class="tile g5"><span class="badge">● 实况</span></div>
+        <div class="tile g6"></div>
+        <div class="tile g7"></div>
+        <div class="tile g8"><span class="badge">● 实况</span><span class="check">✓</span></div>
+        <div class="tile g1"></div>
+        <div class="tile g2"><span class="badge">▶ 00:12</span></div>
+      </div>
+
+      <div class="day">2025年5月12日 星期一<span>· 24 张</span></div>
+      <div class="grid">
+        <div class="tile g3"></div>
+        <div class="tile g4"><span class="badge">● 实况</span></div>
+        <div class="tile g5"></div>
+        <div class="tile g6"></div>
+        <div class="tile g7"><span class="badge">▶ 00:07</span></div>
+        <div class="tile g8"></div>
+        <div class="tile g1"></div>
+        <div class="tile g2"><span class="badge">● 实况</span></div>
+        <div class="tile g3"></div>
+        <div class="tile g4"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="selbar">
+  <span class="n">已选 <b>2</b></span>
+  <button class="btn plain">全选</button>
+  <button class="btn plain">清除</button>
+  <button class="btn plain">导出</button>
+  <button class="btn destructive">删除</button>
+</div>
+</body>
+</html>
