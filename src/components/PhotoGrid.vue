@@ -1,13 +1,32 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, ref } from "vue";
 import { lpmUrl } from "../lib/lpm";
-import type { ImageItem } from "../stores/library";
+import type { AssetRow, ImageItem } from "../stores/library";
 
 const props = defineProps<{
   items: ImageItem[];
+  /** 与 `items` 下标一一对应的原始条目，用于取 id / movie_path。 */
+  assets: AssetRow[];
   columns: number;
   gap: number;
 }>();
+
+const emit = defineEmits<{
+  /** 悬停进入某个瓦片；`asset` 可能为 null（下标越界时）。 */
+  hover: [payload: { asset: AssetRow | null; rect: DOMRect }];
+  "hover-out": [];
+  /** 滚动中：父组件据此抑制悬停预览（设计 §7.3）。 */
+  suppress: [];
+}>();
+
+function onTileEnter(index: number, e: MouseEvent) {
+  const el = e.currentTarget as HTMLElement | null;
+  if (!el) return;
+  emit("hover", {
+    asset: props.assets[index] ?? null,
+    rect: el.getBoundingClientRect(),
+  });
+}
 
 // 1x1 透明 GIF：未加载的瓦片用它占位，避免滚动途中批量发起请求。
 const PLACEHOLDER =
@@ -78,6 +97,9 @@ function markVisibleLoaded() {
 
 let ticking = false;
 function onScroll() {
+  // 滚动期间与停稳后的短时间内都不触发悬停预览（设计 §7.3）。
+  emit("suppress");
+
   // 快速拖动滚动条时一帧可能触发多次 scroll，用 rAF 节流到一帧一次重渲染。
   if (ticking) return;
   ticking = true;
@@ -159,6 +181,8 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
           height: t.size + 'px',
           transform: `translate(${t.x}px, ${t.y}px)`,
         }"
+        @mouseenter="onTileEnter(t.index, $event)"
+        @mouseleave="emit('hover-out')"
       >
         <img
           :src="tileSrc(t.index, t.item.path)"

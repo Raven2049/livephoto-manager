@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useLibrary, type ImageItem } from "./stores/library";
+import { useLibrary, type AssetRow, type ImageItem } from "./stores/library";
 import { useImport } from "./stores/import";
+import { usePreview } from "./composables/usePreview";
 import { useZoom } from "./composables/useZoom";
 import PhotoGrid from "./components/PhotoGrid.vue";
 
@@ -11,6 +12,12 @@ const imp = useImport();
 const zoom = useZoom(5);
 const grid = ref<InstanceType<typeof PhotoGrid> | null>(null);
 const main = ref<HTMLElement | null>(null);
+
+// 全局唯一一个 <video>（设计 §8.1 决定 1），由 hover 事件定位到目标瓦片。
+const videoEl = ref<HTMLVideoElement | null>(null);
+const pv = usePreview(videoEl);
+/** 当前悬停瓦片相对 main 的矩形；null 表示没有预览。 */
+const hoverRect = ref<{ x: number; y: number; w: number; h: number } | null>(null);
 
 async function pickLibrary() {
   const dir = await open({ directory: true, multiple: false });
@@ -22,20 +29,59 @@ async function importFromDevice() {
   await lib.refresh();
 }
 
-const imageItems = computed<ImageItem[]>(() =>
-  lib.assets
-    .filter((a) => !a.missing && (a.thumb_path || a.still_path))
-    .map((a) => ({
-      // 优先用缩略图（HEIC 原图 WebView2 解不了）。
-      path: (a.thumb_path || a.still_path) as string,
-      name: a.base_name,
-      size: 0,
-    })),
+// 可显示的条目。gridAssets 与 imageItems 下标一一对应，PhotoGrid 靠下标取回
+// 原始条目（id / movie_path）用于悬停预览。
+const gridAssets = computed<AssetRow[]>(() =>
+  lib.assets.filter((a) => !a.missing && (a.thumb_path || a.still_path)),
 );
+
+const imageItems = computed<ImageItem[]>(() =>
+  gridAssets.value.map((a) => ({
+    // 优先用缩略图（HEIC 原图 WebView2 解不了）。
+    path: (a.thumb_path || a.still_path) as string,
+    name: a.base_name,
+    size: 0,
+  })),
+);
+
+const slotStyle = computed(() => {
+  const r = hoverRect.value;
+  if (!r) return {};
+  return {
+    left: `${r.x}px`,
+    top: `${r.y}px`,
+    width: `${r.w}px`,
+    height: `${r.h}px`,
+  };
+});
+
+function onHover(payload: { asset: AssetRow | null; rect: DOMRect }) {
+  const base = main.value?.getBoundingClientRect();
+  if (!base) return;
+  hoverRect.value = {
+    x: payload.rect.left - base.left,
+    y: payload.rect.top - base.top,
+    w: payload.rect.width,
+    h: payload.rect.height,
+  };
+  pv.enter(payload.asset);
+}
+
+function onHoverOut() {
+  pv.hide();
+  hoverRect.value = null;
+}
+
+/** 滚动或缩放：收起预览并抑制新的触发（设计 §7.3）。 */
+function onSuppress() {
+  pv.suppress();
+  hoverRect.value = null;
+}
 
 function onWheel(e: WheelEvent) {
   if (!e.ctrlKey) return; // 只有 Ctrl+滚轮才缩放
   e.preventDefault();
+  pv.suppress();
   const anchor = grid.value?.captureAnchor(e.clientX, e.clientY) ?? null;
   const dpr = window.devicePixelRatio || 1;
   const vw = main.value?.clientWidth ?? window.innerWidth;
@@ -79,7 +125,28 @@ onBeforeUnmount(() => {
       <span v-else>未打开库</span>
     </header>
     <main ref="main">
-      <PhotoGrid ref="grid" :items="imageItems" :columns="zoom.columns.value" :gap="8" />
+      <PhotoGrid
+        ref="grid"
+        :items="imageItems"
+        :assets="gridAssets"
+        :columns="zoom.columns.value"
+        :gap="8"
+        @hover="onHover"
+        @hover-out="onHoverOut"
+        @suppress="onSuppress"
+      />
+      <!-- 全局唯一一个 <video>，绝对定位到当前悬停的瓦片上 -->
+      <div v-show="hoverRect" class="preview-slot" :style="slotStyle">
+        <video
+          ref="videoEl"
+          class="preview"
+          :class="{ show: pv.visible }"
+          muted
+          playsinline
+          loop
+        ></video>
+        <span v-if="pv.loading" class="preview-loading"></span>
+      </div>
     </main>
   </div>
 </template>
@@ -111,5 +178,46 @@ main {
   position: relative;
   flex: 1;
   min-height: 0;
+  /* 瓦片滚出视口时，悬停预览也要被裁掉 */
+  overflow: hidden;
+}
+
+/* 悬停预览：位置和尺寸都跟随目标瓦片 */
+.preview-slot {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+}
+.preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+.preview.show {
+  opacity: 1;
+}
+/* 生成/缓冲期间的一个淡进度点，避免出现空白格 */
+.preview-loading {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0.75;
+  animation: preview-pulse 900ms ease-in-out infinite;
+}
+@keyframes preview-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.9;
+  }
 }
 </style>
