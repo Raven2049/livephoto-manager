@@ -111,6 +111,19 @@ pub fn upsert_device(
     )
 }
 
+/// 按库内目录名找设备行。重扫（`indexer`）拿不到真实序列号，必须复用导入时
+/// 建立的设备，否则同一台手机会有两个 `device`，业务键含 `device_id` 会导致重复条目。
+/// 同一目录若有多个设备行，优先返回非 `unknown` 型号的那个（即真实导入建立的）。
+pub fn device_id_for_folder(conn: &Connection, folder_name: &str) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT id FROM device WHERE folder_name = ?1
+         ORDER BY (model = 'unknown') ASC, id ASC LIMIT 1",
+        params![folder_name],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
 fn split(f: &Option<FileRef>) -> (Option<String>, Option<String>, Option<i64>) {
     match f {
         Some(fr) => (
@@ -165,6 +178,27 @@ pub fn upsert_asset(
         ],
     )?;
     Ok(())
+}
+
+/// 重扫专用：同一 (device_id, base_name) 若已有条目，沿用其 taken_at；否则用 0。
+///
+/// `indexer`（扫描磁盘）拿不到拍摄时间，若直接用 0 会与导入时写入的真 `taken_at`
+/// 组成不同的业务键，导致重扫新增重复行。它只能防止继续产生重复，
+/// 不能清理历史遗留的重复行（那些行 `taken_at` 已然不同）。
+pub fn upsert_asset_preserving_taken_at(
+    conn: &Connection,
+    device_id: i64,
+    asset: &PairedAsset,
+) -> rusqlite::Result<()> {
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT taken_at FROM asset WHERE device_id = ?1 AND base_name = ?2
+             ORDER BY taken_at DESC LIMIT 1",
+            params![device_id, asset.base_name],
+            |r| r.get(0),
+        )
+        .optional()?;
+    upsert_asset(conn, device_id, asset, existing.unwrap_or(0))
 }
 
 /// 扫描前把某设备下所有条目置 missing=1；命中的条目会在 upsert 时清回 0。
@@ -346,6 +380,34 @@ pub fn assets_for_classify(conn: &Connection) -> rusqlite::Result<Vec<ClassifyJo
     rows.collect()
 }
 
+/// 删除指定 id 的条目，返回实际删除行数。
+pub fn delete_assets(conn: &Connection, ids: &[i64]) -> rusqlite::Result<usize> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let ph = vec!["?"; ids.len()].join(",");
+    let sql = format!("DELETE FROM asset WHERE id IN ({ph})");
+    conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))
+}
+
+/// 还有多少条目引用同一个缩略图路径（用于判断缓存是否为孤儿）。
+pub fn thumb_ref_count(conn: &Connection, path: &str) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT count(*) FROM asset WHERE thumb_path = ?1",
+        params![path],
+        |r| r.get(0),
+    )
+}
+
+/// 还有多少条目引用同一个预览片路径。
+pub fn preview_ref_count(conn: &Connection, path: &str) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT count(*) FROM asset WHERE preview_path = ?1",
+        params![path],
+        |r| r.get(0),
+    )
+}
+
 /// 取第一条设备记录（型号, 序列号），供诊断报告。
 pub fn first_device(conn: &Connection) -> rusqlite::Result<Option<(String, String)>> {
     conn.query_row(
@@ -370,6 +432,7 @@ pub struct AssetRow {
     pub id: i64,
     pub kind: i64,
     pub integrity: i64,
+    pub taken_at: i64,
     pub base_name: String,
     pub still_path: Option<String>,
     pub movie_path: Option<String>,
@@ -377,23 +440,154 @@ pub struct AssetRow {
     pub missing: bool,
 }
 
-pub fn page_assets(conn: &Connection, offset: i64, limit: i64) -> rusqlite::Result<Vec<AssetRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, kind, integrity, base_name, still_path, movie_path, thumb_path, missing
-         FROM asset
-         ORDER BY base_name
-         LIMIT ?1 OFFSET ?2",
-    )?;
-    let rows = stmt.query_map(params![limit, offset], |r| {
-        Ok(AssetRow {
+/// 转义 SQLite LIKE 的通配符（`%` `_` `\`），配合 `ESCAPE '\'` 使用。
+pub fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct AssetFilter {
+    /// 按 base_name 子串匹配（LIKE，大小写不敏感由 SQLite 的 ASCII 规则处理）。
+    pub text: Option<String>,
+    /// 1=photo 2=video 3=live。
+    pub kind: Option<i64>,
+    /// 完整性白名单；空或 None 表示不过滤。
+    pub integrity: Option<Vec<i64>>,
+    /// 拍摄时间下界（epoch 秒，含）。
+    pub from: Option<i64>,
+    /// 拍摄时间上界（epoch 秒，含）。
+    pub to: Option<i64>,
+}
+
+fn where_clause(f: &AssetFilter, params: &mut Vec<rusqlite::types::Value>) -> String {
+    use rusqlite::types::Value;
+    let mut clauses: Vec<String> = Vec::new();
+
+    if let Some(t) = f.text.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        clauses.push("base_name LIKE ? ESCAPE '\\'".to_string());
+        params.push(Value::Text(format!("%{}%", escape_like(t))));
+    }
+    if let Some(k) = f.kind {
+        clauses.push("kind = ?".to_string());
+        params.push(Value::Integer(k));
+    }
+    if let Some(list) = f.integrity.as_ref().filter(|l| !l.is_empty()) {
+        let ph = vec!["?"; list.len()].join(",");
+        clauses.push(format!("integrity IN ({ph})"));
+        for v in list {
+            params.push(Value::Integer(*v));
+        }
+    }
+    if let Some(from) = f.from {
+        clauses.push("taken_at >= ?".to_string());
+        params.push(Value::Integer(from));
+    }
+    if let Some(to) = f.to {
+        clauses.push("taken_at <= ?".to_string());
+        params.push(Value::Integer(to));
+    }
+    if clauses.is_empty() {
+        "1=1".to_string()
+    } else {
+        clauses.join(" AND ")
+    }
+}
+
+fn map_asset_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AssetRow> {
+    Ok(AssetRow {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        integrity: r.get(2)?,
+        taken_at: r.get(3)?,
+        base_name: r.get(4)?,
+        still_path: r.get(5)?,
+        movie_path: r.get(6)?,
+        thumb_path: r.get(7)?,
+        missing: r.get::<_, i64>(8)? != 0,
+    })
+}
+
+pub fn page_assets_filtered(
+    conn: &Connection,
+    filter: &AssetFilter,
+    offset: i64,
+    limit: i64,
+) -> rusqlite::Result<Vec<AssetRow>> {
+    let mut params = Vec::new();
+    let w = where_clause(filter, &mut params);
+    let sql = format!(
+        "SELECT id, kind, integrity, taken_at, base_name, still_path, movie_path, thumb_path, missing
+         FROM asset WHERE {w} ORDER BY taken_at DESC, id DESC LIMIT ? OFFSET ?"
+    );
+    params.push(rusqlite::types::Value::Integer(limit));
+    params.push(rusqlite::types::Value::Integer(offset));
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), map_asset_row)?;
+    rows.collect()
+}
+
+pub fn count_assets(conn: &Connection, filter: &AssetFilter) -> rusqlite::Result<i64> {
+    let mut params = Vec::new();
+    let w = where_clause(filter, &mut params);
+    let sql = format!("SELECT count(*) FROM asset WHERE {w}");
+    conn.query_row(&sql, rusqlite::params_from_iter(params.iter()), |r| {
+        r.get(0)
+    })
+}
+
+pub fn asset_ids(conn: &Connection, filter: &AssetFilter) -> rusqlite::Result<Vec<i64>> {
+    let mut params = Vec::new();
+    let w = where_clause(filter, &mut params);
+    let sql = format!("SELECT id FROM asset WHERE {w} ORDER BY taken_at DESC, id DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| r.get(0))?;
+    rows.collect()
+}
+
+/// 导出/删除需要的条目文件信息（含原文件与派生缓存路径）。
+#[derive(Debug, Clone)]
+pub struct AssetFiles {
+    pub id: i64,
+    pub base_name: String,
+    pub still_path: Option<String>,
+    pub still_ext: Option<String>,
+    pub movie_path: Option<String>,
+    pub movie_ext: Option<String>,
+    pub thumb_path: Option<String>,
+    pub preview_path: Option<String>,
+}
+
+/// 按 id 批量取条目文件信息。顺序不保证，空输入返回空。
+pub fn assets_by_ids(conn: &Connection, ids: &[i64]) -> rusqlite::Result<Vec<AssetFiles>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ph = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "SELECT id, base_name, still_path, still_ext, movie_path, movie_ext, thumb_path, preview_path
+         FROM asset WHERE id IN ({ph})"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+        Ok(AssetFiles {
             id: r.get(0)?,
-            kind: r.get(1)?,
-            integrity: r.get(2)?,
-            base_name: r.get(3)?,
-            still_path: r.get(4)?,
-            movie_path: r.get(5)?,
+            base_name: r.get(1)?,
+            still_path: r.get(2)?,
+            still_ext: r.get(3)?,
+            movie_path: r.get(4)?,
+            movie_ext: r.get(5)?,
             thumb_path: r.get(6)?,
-            missing: r.get::<_, i64>(7)? != 0,
+            preview_path: r.get(7)?,
         })
     })?;
     rows.collect()
@@ -447,7 +641,113 @@ pub fn stats(conn: &Connection) -> rusqlite::Result<LibraryStats> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pairing::{INTEGRITY_STILL_ONLY, KIND_LIVE, KIND_PHOTO};
+    use crate::pairing::{INTEGRITY_STILL_ONLY, KIND_LIVE, KIND_PHOTO, KIND_VIDEO};
+
+    fn seed(conn: &Connection, dev: i64, name: &str, taken_at: i64, kind: i64, integrity: i64) {
+        let a = PairedAsset {
+            base_name: name.into(),
+            kind,
+            integrity,
+            still: Some(FileRef {
+                path: format!("{name}.JPG"),
+                ext: "jpg".into(),
+                size: 10,
+            }),
+            movie: if kind == KIND_LIVE {
+                Some(FileRef {
+                    path: format!("{name}.MOV"),
+                    ext: "mov".into(),
+                    size: 20,
+                })
+            } else {
+                None
+            },
+        };
+        upsert_asset(conn, dev, &a, taken_at).unwrap();
+    }
+
+    #[test]
+    fn escape_like_escapes_wildcards() {
+        assert_eq!(escape_like("a%b_c\\d"), "a\\%b\\_c\\\\d");
+    }
+
+    #[test]
+    fn filter_by_kind_integrity_and_date() {
+        let conn = open_in_memory().unwrap();
+        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
+        seed(&conn, dev, "IMG_1", 100, KIND_LIVE, 0);
+        seed(&conn, dev, "IMG_2", 200, KIND_PHOTO, 3);
+        seed(&conn, dev, "IMG_3", 300, KIND_VIDEO, 4);
+
+        let f = AssetFilter {
+            kind: Some(KIND_PHOTO),
+            ..Default::default()
+        };
+        let rows = page_assets_filtered(&conn, &f, 0, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].base_name, "IMG_2");
+
+        let f = AssetFilter {
+            integrity: Some(vec![3, 4]),
+            ..Default::default()
+        };
+        assert_eq!(page_assets_filtered(&conn, &f, 0, 10).unwrap().len(), 2);
+
+        let f = AssetFilter {
+            from: Some(150),
+            to: Some(299),
+            ..Default::default()
+        };
+        let rows = page_assets_filtered(&conn, &f, 0, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].base_name, "IMG_2");
+    }
+
+    #[test]
+    fn filter_text_matches_substring_and_escapes() {
+        let conn = open_in_memory().unwrap();
+        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
+        seed(&conn, dev, "IMG_0001", 1, KIND_PHOTO, 3);
+        seed(&conn, dev, "IMG_1002", 2, KIND_PHOTO, 3);
+
+        let f = AssetFilter {
+            text: Some("IMG_0".into()),
+            ..Default::default()
+        };
+        let rows = page_assets_filtered(&conn, &f, 0, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].base_name, "IMG_0001");
+    }
+
+    #[test]
+    fn page_orders_by_taken_at_desc_then_id_desc() {
+        let conn = open_in_memory().unwrap();
+        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
+        seed(&conn, dev, "OLD", 100, KIND_PHOTO, 3);
+        seed(&conn, dev, "NEW", 300, KIND_PHOTO, 3);
+        seed(&conn, dev, "MID", 200, KIND_PHOTO, 3);
+
+        let rows = page_assets_filtered(&conn, &AssetFilter::default(), 0, 10).unwrap();
+        let names: Vec<_> = rows.iter().map(|r| r.base_name.as_str()).collect();
+        assert_eq!(names, vec!["NEW", "MID", "OLD"]);
+        assert_eq!(rows[0].taken_at, 300);
+    }
+
+    #[test]
+    fn count_and_ids_match_the_filtered_page() {
+        let conn = open_in_memory().unwrap();
+        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
+        seed(&conn, dev, "A", 1, KIND_PHOTO, 3);
+        seed(&conn, dev, "B", 2, KIND_LIVE, 0);
+
+        let f = AssetFilter {
+            integrity: Some(vec![0]),
+            ..Default::default()
+        };
+        assert_eq!(count_assets(&conn, &f).unwrap(), 1);
+        assert_eq!(asset_ids(&conn, &f).unwrap().len(), 1);
+        assert_eq!(page_assets_filtered(&conn, &f, 0, 10).unwrap().len(), 1);
+    }
 
     #[test]
     fn migrate_creates_tables_and_sets_version() {
@@ -632,7 +932,7 @@ mod tests {
             upsert_asset(&conn, dev, &a, 0).unwrap();
         }
 
-        let page = page_assets(&conn, 1, 1).unwrap();
+        let page = page_assets_filtered(&conn, &AssetFilter::default(), 1, 1).unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].base_name, "B");
 
@@ -640,5 +940,75 @@ mod tests {
         assert_eq!(s.total, 3);
         assert_eq!(s.live, 1);
         assert_eq!(s.photo, 2);
+    }
+
+    #[test]
+    fn rescan_preserves_imported_taken_at() {
+        let conn = open_in_memory().unwrap();
+        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
+        seed(&conn, dev, "IMG_1", 12345, KIND_PHOTO, 3);
+
+        let a = PairedAsset {
+            base_name: "IMG_1".into(),
+            kind: KIND_PHOTO,
+            integrity: INTEGRITY_STILL_ONLY,
+            still: Some(FileRef {
+                path: "IMG_1.JPG".into(),
+                ext: "jpg".into(),
+                size: 10,
+            }),
+            movie: None,
+        };
+        upsert_asset_preserving_taken_at(&conn, dev, &a).unwrap();
+
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM asset", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "重扫不得因 taken_at=0 新增重复行");
+        let t: i64 = conn
+            .query_row("SELECT taken_at FROM asset", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(t, 12345, "已有条目的 taken_at 必须保留");
+    }
+
+    #[test]
+    fn assets_by_ids_returns_matching_rows_and_empty_for_empty_input() {
+        let conn = open_in_memory().unwrap();
+        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
+        seed(&conn, dev, "A", 1, KIND_LIVE, 0);
+        seed(&conn, dev, "B", 2, KIND_PHOTO, 3);
+
+        assert!(assets_by_ids(&conn, &[]).unwrap().is_empty());
+
+        let ids = asset_ids(&conn, &AssetFilter::default()).unwrap();
+        let rows = assets_by_ids(&conn, &ids).unwrap();
+        assert_eq!(rows.len(), 2);
+        let a = rows.iter().find(|r| r.base_name == "A").unwrap();
+        assert_eq!(a.still_ext.as_deref(), Some("jpg"));
+        assert_eq!(a.movie_ext.as_deref(), Some("mov"));
+    }
+
+    #[test]
+    fn delete_assets_removes_rows_and_counts_cache_refs() {
+        let conn = open_in_memory().unwrap();
+        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
+        seed(&conn, dev, "A", 1, KIND_PHOTO, 3);
+        seed(&conn, dev, "B", 2, KIND_PHOTO, 3);
+        conn.execute(
+            "UPDATE asset SET thumb_path='thumbs/x.webp', preview_path='previews/y.mp4'",
+            [],
+        )
+        .unwrap();
+
+        let ids = asset_ids(&conn, &AssetFilter::default()).unwrap();
+        assert_eq!(thumb_ref_count(&conn, "thumbs/x.webp").unwrap(), 2);
+
+        delete_assets(&conn, &[ids[0]]).unwrap();
+        assert_eq!(thumb_ref_count(&conn, "thumbs/x.webp").unwrap(), 1);
+
+        delete_assets(&conn, &[ids[1]]).unwrap();
+        assert_eq!(thumb_ref_count(&conn, "thumbs/x.webp").unwrap(), 0);
+        assert_eq!(preview_ref_count(&conn, "previews/y.mp4").unwrap(), 0);
+        delete_assets(&conn, &[]).unwrap();
     }
 }

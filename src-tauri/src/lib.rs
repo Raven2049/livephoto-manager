@@ -1,7 +1,9 @@
 mod commands;
 mod db;
+mod delete;
 mod device;
 mod diagnostics;
+mod export;
 mod ffmpeg;
 mod importer;
 mod indexer;
@@ -59,12 +61,16 @@ pub fn run() {
             commands::scan_library,
             commands::library_stats,
             commands::list_assets,
+            commands::count_assets,
+            commands::list_asset_ids,
             commands::import_from_device,
             commands::generate_thumbs,
             commands::cancel_import,
             commands::ensure_preview,
             commands::classify_library,
             commands::export_diagnostics,
+            commands::export_assets,
+            commands::delete_assets,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

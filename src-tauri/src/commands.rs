@@ -37,10 +37,36 @@ pub fn library_stats(state: tauri::State<'_, AppState>) -> Result<crate::db::Lib
 pub fn list_assets(
     offset: i64,
     limit: i64,
+    filter: Option<crate::db::AssetFilter>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<crate::db::AssetRow>, String> {
+    let f = filter.unwrap_or_default();
     state
-        .with(|_, conn| crate::db::page_assets(conn, offset, limit))
+        .with(|_, conn| crate::db::page_assets_filtered(conn, &f, offset, limit))
+        .ok_or_else(|| "库未打开".to_string())?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn count_assets(
+    filter: Option<crate::db::AssetFilter>,
+    state: tauri::State<'_, AppState>,
+) -> Result<i64, String> {
+    let f = filter.unwrap_or_default();
+    state
+        .with(|_, conn| crate::db::count_assets(conn, &f))
+        .ok_or_else(|| "库未打开".to_string())?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_asset_ids(
+    filter: Option<crate::db::AssetFilter>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<i64>, String> {
+    let f = filter.unwrap_or_default();
+    state
+        .with(|_, conn| crate::db::asset_ids(conn, &f))
         .ok_or_else(|| "库未打开".to_string())?
         .map_err(|e| e.to_string())
 }
@@ -228,14 +254,14 @@ pub async fn export_diagnostics(state: tauri::State<'_, AppState>) -> Result<Str
             .collect();
         let failed_errors = crate::db::failed_errors(&conn, 50)?;
 
-        let windows_version = std::process::Command::new("cmd")
+        let windows_version = crate::ffmpeg::command("cmd")
             .args(["/c", "ver"])
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default();
         let ffmpeg_version = crate::ffmpeg::find_ffmpeg()
             .ok()
-            .and_then(|p| std::process::Command::new(p).arg("-version").output().ok())
+            .and_then(|p| crate::ffmpeg::command(p).arg("-version").output().ok())
             .map(|o| {
                 String::from_utf8_lossy(&o.stdout)
                     .lines()
@@ -261,6 +287,220 @@ pub async fn export_diagnostics(state: tauri::State<'_, AppState>) -> Result<Str
             .join(format!("diagnostics-{}.txt", crate::db::now_epoch()));
         std::fs::write(&path, text)?;
         Ok(path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExportProgress {
+    pub total: usize,
+    pub done: usize,
+    pub failed: usize,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExportSummary {
+    pub total: usize,
+    pub done: usize,
+    pub failed: usize,
+    pub errors: Vec<String>,
+}
+
+/// 把选中的条目按原样拷贝（配对文件一起）到 `dest` 目录。
+/// 只拷贝 `originals/` 里的源文件，不转码、不改索引；重名成对加后缀。
+#[tauri::command]
+pub async fn export_assets(
+    app: tauri::AppHandle,
+    ids: Vec<i64>,
+    dest: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ExportSummary, String> {
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+    state.reset_cancel();
+    let cancel = state.cancel_flag();
+
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<ExportSummary> {
+        let lib = Library::open(&root)?;
+        let conn = crate::db::open(&lib.db_path())?;
+        let dest_dir = std::path::PathBuf::from(&dest);
+        if !dest_dir.is_dir() {
+            anyhow::bail!("导出目标不是目录: {dest}");
+        }
+
+        let files = crate::db::assets_by_ids(&conn, &ids)?;
+        let total = files.len();
+        let mut summary = ExportSummary {
+            total,
+            done: 0,
+            failed: 0,
+            errors: Vec::new(),
+        };
+
+        let mut bytes_total = 0u64;
+        for f in &files {
+            for p in [&f.still_path, &f.movie_path].into_iter().flatten() {
+                if let Ok(m) = std::fs::metadata(p) {
+                    bytes_total += m.len();
+                }
+            }
+        }
+        let mut bytes_done = 0u64;
+
+        for f in &files {
+            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            let (still_dst, movie_dst) = crate::export::unique_export_paths(
+                &dest_dir,
+                &f.base_name,
+                f.still_ext.as_deref(),
+                f.movie_ext.as_deref(),
+            );
+            let mut ok = true;
+            if let (Some(s), Some(d)) = (&f.still_path, &still_dst) {
+                match std::fs::copy(s, d) {
+                    Ok(n) => bytes_done += n,
+                    Err(e) => {
+                        ok = false;
+                        summary.errors.push(format!("{s}: {e}"));
+                    }
+                }
+            }
+            if let (Some(s), Some(d)) = (&f.movie_path, &movie_dst) {
+                match std::fs::copy(s, d) {
+                    Ok(n) => bytes_done += n,
+                    Err(e) => {
+                        ok = false;
+                        summary.errors.push(format!("{s}: {e}"));
+                    }
+                }
+            }
+            if ok {
+                summary.done += 1;
+            } else {
+                summary.failed += 1;
+            }
+            let p = ExportProgress {
+                total,
+                done: summary.done + summary.failed,
+                failed: summary.failed,
+                bytes_done,
+                bytes_total,
+            };
+            let _ = app.emit("export://progress", p);
+        }
+
+        summary.errors.truncate(50);
+        Ok(summary)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeleteProgress {
+    pub total: usize,
+    pub done: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeleteSummary {
+    pub total: usize,
+    pub deleted: usize,
+    pub failed: usize,
+    pub errors: Vec<String>,
+}
+
+/// 把选中条目移入 Windows 回收站，并清理索引与孤儿缓存。
+/// 只删本地库文件，不接触设备（设计非目标：不做双向删除）。
+#[tauri::command]
+pub async fn delete_assets(
+    app: tauri::AppHandle,
+    ids: Vec<i64>,
+    state: tauri::State<'_, AppState>,
+) -> Result<DeleteSummary, String> {
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+    state.reset_cancel();
+    let cancel = state.cancel_flag();
+
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<DeleteSummary> {
+        let lib = Library::open(&root)?;
+        let conn = crate::db::open(&lib.db_path())?;
+        let files = crate::db::assets_by_ids(&conn, &ids)?;
+        let total = files.len();
+        let mut summary = DeleteSummary {
+            total,
+            deleted: 0,
+            failed: 0,
+            errors: Vec::new(),
+        };
+
+        let root_path = lib.root().to_path_buf();
+        let mut deletable: std::collections::HashSet<i64> = std::collections::HashSet::new();
+
+        for (i, f) in files.iter().enumerate() {
+            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            let mut ok = true;
+            for src in crate::delete::source_paths(f) {
+                let p = std::path::Path::new(&src);
+                if !p.exists() {
+                    continue; // 文件已不在，条目仍可删
+                }
+                if !crate::delete::inside_root(p, &root_path) {
+                    ok = false;
+                    summary.errors.push(format!("{src}: 不在库目录内，已跳过"));
+                    continue;
+                }
+                if let Err(e) = trash::delete(p) {
+                    ok = false;
+                    summary.errors.push(format!("{src}: {e}"));
+                }
+            }
+            if ok {
+                deletable.insert(f.id);
+            } else {
+                summary.failed += 1;
+            }
+            let _ = app.emit(
+                "delete://progress",
+                DeleteProgress {
+                    total,
+                    done: i + 1,
+                    failed: summary.failed,
+                },
+            );
+        }
+
+        crate::db::delete_assets(&conn, &deletable.iter().copied().collect::<Vec<_>>())?;
+        summary.deleted = deletable.len();
+
+        // 清理孤儿缓存：必须在删行之后按剩余引用判断（内容哈希可被多条复用）。
+        for f in &files {
+            if !deletable.contains(&f.id) {
+                continue;
+            }
+            if let Some(path) = f.thumb_path.as_deref() {
+                if crate::delete::cache_is_orphan(crate::db::thumb_ref_count(&conn, path)?) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            if let Some(path) = f.preview_path.as_deref() {
+                if crate::delete::cache_is_orphan(crate::db::preview_ref_count(&conn, path)?) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+
+        summary.errors.truncate(50);
+        Ok(summary)
     })
     .await
     .map_err(|e| e.to_string())?

@@ -1,11 +1,13 @@
 import { defineStore } from "pinia";
-import { shallowRef, ref } from "vue";
+import { shallowRef, reactive, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export interface AssetRow {
   id: number;
   kind: number;
   integrity: number;
+  taken_at: number;
   base_name: string;
   still_path: string | null;
   movie_path: string | null;
@@ -29,6 +31,61 @@ export interface ImageItem {
   size: number;
 }
 
+/** 前端筛选状态（日期是 "YYYY-MM-DD"，提交后端前换算成 epoch 秒）。 */
+export interface AssetFilter {
+  text: string;
+  kind: number | null;
+  integrity: number[];
+  from: string | null;
+  to: string | null;
+}
+
+export type GranularityOverride = "auto" | "day" | "month" | "year";
+
+export interface ExportProgress {
+  total: number;
+  done: number;
+  failed: number;
+  bytes_done: number;
+  bytes_total: number;
+}
+
+export interface ExportSummary {
+  total: number;
+  done: number;
+  failed: number;
+  errors: string[];
+}
+
+export interface DeleteProgress {
+  total: number;
+  done: number;
+  failed: number;
+}
+
+export interface DeleteSummary {
+  total: number;
+  deleted: number;
+  failed: number;
+  errors: string[];
+}
+
+export const PAGE_SIZE = 1000;
+
+function backendFilter(f: AssetFilter) {
+  const dayStart = (s: string | null) =>
+    s ? Math.floor(new Date(`${s}T00:00:00`).getTime() / 1000) : null;
+  const dayEnd = (s: string | null) =>
+    s ? Math.floor(new Date(`${s}T23:59:59`).getTime() / 1000) : null;
+  return {
+    text: f.text.trim() || null,
+    kind: f.kind,
+    integrity: f.integrity.length ? f.integrity : null,
+    from: dayStart(f.from),
+    to: dayEnd(f.to),
+  };
+}
+
 export const useLibrary = defineStore("library", () => {
   const root = ref<string | null>(null);
   // 设计 §8.3：上万条对象绝不能被 Vue 深层代理，必须 shallowRef。
@@ -36,6 +93,24 @@ export const useLibrary = defineStore("library", () => {
   const stats = ref<LibraryStats | null>(null);
   const busy = ref(false);
   const error = ref<string | null>(null);
+
+  // 过滤 + 分页 + 选中（计划 8）。
+  const filter = reactive<AssetFilter>({
+    text: "",
+    kind: null,
+    integrity: [],
+    from: null,
+    to: null,
+  });
+  const total = ref(0);
+  const loading = ref(false);
+  const selected = ref<Set<number>>(new Set());
+  const granOverride = ref<GranularityOverride>("auto");
+
+  function setSelected(next: Set<number>) {
+    // 整体替换，保证 Vue 能追踪 Set 的变化。
+    selected.value = next;
+  }
 
   async function openLibrary(path: string) {
     busy.value = true;
@@ -96,13 +171,122 @@ export const useLibrary = defineStore("library", () => {
     return await invoke<string>("export_diagnostics");
   }
 
-  async function refresh() {
+  /** 重置分页并重新加载第一页；筛选变化与库变更后调用。 */
+  async function reload() {
+    loading.value = true;
+    error.value = null;
+    try {
+      const f = backendFilter(filter);
+      const [rows, n] = await Promise.all([
+        invoke<AssetRow[]>("list_assets", { offset: 0, limit: PAGE_SIZE, filter: f }),
+        invoke<number>("count_assets", { filter: f }),
+      ]);
+      assets.value = rows;
+      total.value = n;
+      setSelected(new Set());
+    } catch (e) {
+      error.value = String(e);
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  /** 追加下一页（滚动接近底部时由网格触发）。 */
+  async function loadMore() {
+    if (loading.value || assets.value.length >= total.value) return;
+    loading.value = true;
+    try {
+      const f = backendFilter(filter);
+      const next = await invoke<AssetRow[]>("list_assets", {
+        offset: assets.value.length,
+        limit: PAGE_SIZE,
+        filter: f,
+      });
+      // shallowRef 必须整体替换。
+      assets.value = [...assets.value, ...next];
+    } catch (e) {
+      error.value = String(e);
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function refreshStats() {
     stats.value = await invoke<LibraryStats>("library_stats");
-    // 本计划先一次性取前 5000 条；分页 + 虚拟滚动的联动属后续计划。
-    assets.value = await invoke<AssetRow[]>("list_assets", {
-      offset: 0,
-      limit: 5000,
+  }
+
+  function toggleSelect(id: number) {
+    const next = new Set(selected.value);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelected(next);
+  }
+
+  /** 选中当前筛选条件下的整库（后端只回 id）。 */
+  async function selectAll() {
+    const ids = await invoke<number[]>("list_asset_ids", {
+      filter: backendFilter(filter),
     });
+    setSelected(new Set(ids));
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
+
+  const exporting = ref(false);
+  const exportProgress = ref<ExportProgress | null>(null);
+
+  /** 把选中条目原样拷贝到 `dest` 目录。 */
+  async function exportSelected(dest: string) {
+    const ids = [...selected.value];
+    if (!ids.length) return;
+    exporting.value = true;
+    error.value = null;
+    const un = await listen<ExportProgress>("export://progress", (e) => {
+      exportProgress.value = e.payload;
+    });
+    try {
+      const r = await invoke<ExportSummary>("export_assets", { ids, dest });
+      if (r.failed) error.value = `导出完成，失败 ${r.failed} 项`;
+    } catch (e) {
+      error.value = String(e);
+    } finally {
+      un();
+      exporting.value = false;
+      exportProgress.value = null;
+    }
+  }
+
+  const deleting = ref(false);
+  const deleteProgress = ref<DeleteProgress | null>(null);
+
+  /** 把选中条目移入回收站并清理索引/缓存。 */
+  async function deleteSelected() {
+    const ids = [...selected.value];
+    if (!ids.length) return;
+    deleting.value = true;
+    error.value = null;
+    const un = await listen<DeleteProgress>("delete://progress", (e) => {
+      deleteProgress.value = e.payload;
+    });
+    try {
+      const r = await invoke<DeleteSummary>("delete_assets", { ids });
+      if (r.failed) error.value = `删除完成，失败 ${r.failed} 项`;
+      await refresh();
+    } catch (e) {
+      error.value = String(e);
+    } finally {
+      un();
+      deleting.value = false;
+      deleteProgress.value = null;
+    }
+  }
+
+  /** 兼容既有调用：刷新统计 + 重置分页。 */
+  async function refresh() {
+    await refreshStats();
+    await reload();
   }
 
   return {
@@ -112,11 +296,28 @@ export const useLibrary = defineStore("library", () => {
     busy,
     error,
     thumbs,
+    filter,
+    total,
+    loading,
+    selected,
+    granOverride,
     openLibrary,
     rescan,
     generateThumbs,
     classify,
     exportDiagnostics,
+    reload,
+    loadMore,
+    refreshStats,
     refresh,
+    toggleSelect,
+    selectAll,
+    clearSelection,
+    exporting,
+    exportProgress,
+    exportSelected,
+    deleting,
+    deleteProgress,
+    deleteSelected,
   };
 });

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useLibrary, type AssetRow, type ImageItem } from "./stores/library";
+import { useLibrary, type AssetRow } from "./stores/library";
 import { useImport } from "./stores/import";
 import { usePreview } from "./composables/usePreview";
 import { useZoom } from "./composables/useZoom";
+import { groupAssets, granularityForColumns, type Granularity } from "./lib/timeline";
 import PhotoGrid from "./components/PhotoGrid.vue";
+import FilterBar from "./components/FilterBar.vue";
 
 const lib = useLibrary();
 const imp = useImport();
@@ -39,20 +41,40 @@ async function importFromDevice() {
   await lib.refresh();
 }
 
+async function exportSelected() {
+  const dir = await open({ directory: true, multiple: false });
+  if (typeof dir === "string") await lib.exportSelected(dir);
+}
+
+async function deleteSelected() {
+  const n = lib.selected.size;
+  if (!n) return;
+  const ok = window.confirm(
+    `将删除 ${n} 个条目并移入回收站（实况条目会同时删除静态图与视频）。\n\n` +
+      `注意：回收站容量不足时，大文件可能被永久删除。`,
+  );
+  if (ok) await lib.deleteSelected();
+}
+
 // 可显示的条目。gridAssets 与 imageItems 下标一一对应，PhotoGrid 靠下标取回
 // 原始条目（id / movie_path）用于悬停预览。
 const gridAssets = computed<AssetRow[]>(() =>
   lib.assets.filter((a) => !a.missing && (a.thumb_path || a.still_path)),
 );
 
-const imageItems = computed<ImageItem[]>(() =>
-  gridAssets.value.map((a) => ({
-    // 优先用缩略图（HEIC 原图 WebView2 解不了）。
-    path: (a.thumb_path || a.still_path) as string,
-    name: a.base_name,
-    size: 0,
-  })),
+// 粒度随缩放列数变化（自动），也可由 FilterBar 手动覆盖。
+const gran = computed<Granularity>(() =>
+  lib.granOverride === "auto" ? granularityForColumns(zoom.columns.value) : lib.granOverride,
 );
+const groups = computed(() => groupAssets(gridAssets.value, gran.value));
+
+function onNearEnd() {
+  void lib.loadMore();
+}
+
+function onToggleSelect(id: number) {
+  lib.toggleSelect(id);
+}
 
 // 仅在存在异常项（1 不一致 / 2 残缺 / 5 疑似副本）时提示。
 const integrityHint = computed(() => {
@@ -153,16 +175,45 @@ onBeforeUnmount(() => {
       <span v-else>未打开库</span>
       <span v-if="diagPath" class="prog">报告: {{ diagPath }}</span>
     </header>
+    <FilterBar />
+    <div class="toolbar">
+      <span>已选 {{ lib.selected.size }}</span>
+      <button @click="lib.selectAll">全选</button>
+      <button @click="lib.clearSelection">清除</button>
+      <button
+        :disabled="!lib.selected.size || lib.exporting"
+        @click="exportSelected"
+      >
+        导出选中
+      </button>
+      <button
+        :disabled="!lib.selected.size || lib.deleting"
+        @click="deleteSelected"
+      >
+        删除选中
+      </button>
+      <span v-if="lib.exporting" class="prog">
+        导出中 {{ lib.exportProgress?.done ?? 0 }}/{{ lib.exportProgress?.total ?? "?" }}
+      </span>
+      <span v-if="lib.deleting" class="prog">
+        删除中 {{ lib.deleteProgress?.done ?? 0 }}/{{ lib.deleteProgress?.total ?? "?" }}
+      </span>
+      <span class="muted">已加载 {{ lib.assets.length }}/{{ lib.total }}</span>
+    </div>
     <main ref="main">
       <PhotoGrid
         ref="grid"
-        :items="imageItems"
-        :assets="gridAssets"
+        :groups="groups"
         :columns="zoom.columns.value"
         :gap="8"
+        :granularity="gran"
+        :selected="lib.selected"
+        :has-more="lib.assets.length < lib.total"
         @hover="onHover"
         @hover-out="onHoverOut"
         @suppress="onSuppress"
+        @toggle-select="onToggleSelect"
+        @near-end="onNearEnd"
       />
       <!-- 全局唯一一个 <video>，绝对定位到当前悬停的瓦片上 -->
       <div v-show="hoverRect" class="preview-slot" :style="slotStyle">
@@ -199,6 +250,17 @@ header {
   display: flex;
   gap: 12px;
   align-items: center;
+}
+.toolbar {
+  padding: 4px 8px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  border-top: 1px solid #222;
+  border-bottom: 1px solid #222;
+}
+.muted {
+  color: #888;
 }
 .err {
   color: #f88;
