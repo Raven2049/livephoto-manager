@@ -40,7 +40,7 @@
 
 **下一步：计划 6（阶段 5：预览片 + 悬停播放）——后端已实现，前端未做，见下方「进行中」。**
 
-## 进行中：计划 6（阶段 5）——后端完成，前端待做
+## 进行中：计划 6（阶段 5）——后端 + 前端均已完成，只剩实测
 
 文档：`docs/superpowers/plans/2026-09-18-stage5-previews.md`。两个取舍已定并写入设计 §7.1/§7.3：
 预览片**截前 6 秒**；并发限流（最多 2）**放在前端**。
@@ -49,25 +49,35 @@
 - `ffmpeg::preview_args()`（480p H.264、`-an`、`-t 6`、`faststart`、`-filter_complex`）+ 单测
 - `thumb::preview_file_name()` / `make_preview_for_movie()`（内容哈希命名、已存在复用）+ 单测
 - `db::asset_movie_path()` / `set_preview_path()` + 单测
-- `commands::ensure_preview(asset_id)` 并已注册
-- 设计文档 §7.1/§7.3 已记录上述两个取舍
-- 验证：`cargo test -p liveporter` 41 通过、clippy 干净、fmt 干净
+- `commands::ensure_preview(asset_id)` 并已注册（`commands.rs:208`、`lib.rs:63`）
+
+**已完成（前端 Task 4）**：
+- `src/composables/usePreview.ts`（新增）：单例 video 引用、350 ms 防抖、滚动/缩放后 300 ms 抑制、
+  最多 2 个在飞、等 `canplay` 再显示避免黑底、token 机制丢弃过期异步结果
+- `src/components/PhotoGrid.vue`：加 `assets` prop（与 `items` 下标一一对应）+ `hover` / `hover-out` / `suppress` 事件
+- `src/App.vue`：挂**唯一一个** `<video>`（用 `v-show` 而非 `v-if`，避免每次悬停销毁重建丢失解码器状态）、
+  hover 时按 `rect` 转换到 `main` 坐标系定位、加载指示点、`main` 加 `overflow: hidden` 裁掉滚出视口的预览
+
+**已验证**：
+- `cargo test --workspace` → liveporter 41 通过 / probe 25 通过
+- `cargo clippy --workspace --all-targets -- -D warnings` 干净；`cargo fmt --all --check` 干净
+- **真 ffmpeg 冒烟已跑过**（原先没跑）：用 ffmpeg 合成 HEVC MOV 作输入，
+  `real_preview_smoke` 与 `real_thumb_smoke` 均通过。产物核对：6.00 秒、h264(High)/avc1、
+  480×854、无音轨、`moov`(36) 在 `mdat`(2577) 之前（faststart 生效）
+- `npm run build`（含 `vue-tsc --noEmit`）通过
 
 **未完成（接着做）**：
-1. **跑真 ffmpeg 冒烟**（未跑过）：
-   ```powershell
-   $env:LIVEPORTER_FFMPEG = "<ffmpeg.exe 路径，见本文件 ffmpeg 说明>"
-   $env:LPM_PREVIEW_INPUT  = "<某个 .MOV>"
-   cargo test -p liveporter real_preview_smoke -- --ignored --nocapture
-   ```
-2. **前端 Task 4**（核心工作量）：`src/composables/usePreview.ts`（单例 `<video>`、350ms 防抖、
-   滚动/缩放期间与结束后 300ms 抑制、最多 2 个在飞）；`PhotoGrid.vue` 瓦片 hover 回调并回传
-   `rect`；`App.vue` 挂**唯一一个** `<video>` 并定位到目标瓦片。计划文档 Task 4 有完整代码骨架。
-3. **Task 5 实测**：悬停 ≥350ms 播放；快速划过不触发；滚动/缩放不触发；DevTools 确认
-   **只有一个 `<video>`**；`previews/` 出现 `<hash>.mp4`。
-4. **Task 6 收尾验证** 与 `notes/2026-09-18-preview-smoke.md`。
+1. **Task 5 实测**（需要真人用鼠标悬停，尚未做）：悬停 ≥350 ms 播放；快速划过不触发；
+   滚动/缩放不触发；DevTools 确认**只有一个** `<video>`；`previews/` 出现 `<hash>.mp4`
+2. **Task 6 收尾验证** 与 `notes/2026-09-18-preview-smoke.md`
+
+**Task 5 的前提**：需要先有一个含实况/视频的库。当前开发机上**没有任何库**，也没插手机。
+两条路：插 iPhone 走真实导入（顺带复验 HEIC 多流），或用 ffmpeg 合成一个最小库目录直接开 `npm run tauri dev`。
 
 **注意**：`previews/` 与 `thumbs/` 都在库内、走 `lpm://`（库根已作为允许根）；不要给瓦片各放 `<video>`。
+
+**一个尚未复验的点**：`real_thumb_smoke` 只跑了 MOV 路径。真实 iPhone HEIC 的**多流怪癖**
+（需 `-filter_complex` 而非 `-vf`，见 `notes/2026-09-17-thumbs-smoke.md`）要等插真机时才能复验。
 
 **计划 4 遗留（动手前必读 `notes/2026-09-17-import-smoke.md`）：**
 - **iPhone 必须设为「保留原件」**：设置 → 照片 → 「传输到 Mac 或 PC」= **保留原件（Keep Originals）**。若设为「自动」，iOS 会即席把 HEIC 转 JPG、处理视频，导致传输慢约 17 倍（1.65 → 28.6 MB/s）且格式被转码。**产品应检测并提示**（信号：设备上静态图全是 `.JPG`、无 `.HEIC`）。改完需**拔插重连**才生效。
@@ -118,11 +128,26 @@
 
 | 依赖 | 说明 |
 |---|---|
-| Rust stable (`x86_64-pc-windows-msvc`) | 安装见计划 1 Task 1 |
+| Rust stable (`x86_64-pc-windows-msvc`) | 需要 `--profile default`（含 clippy / rustfmt），`minimal` 不够 |
 | MSVC 编译器 | Visual Studio 的「C++ 生成工具」工作负载，提供 `cl.exe` / `link.exe` |
-| **Windows SDK** | **必须**。`PortableDevice.h` 是 WPD 的 `PROPERTYKEY` 常量唯一的权威来源，凭记忆写 GUID 会静默出错 |
-| WebView2 运行时 | Win10/11 一般自带；计划 2 起需要 |
+| **Windows SDK** | **必须**。`PortableDevice.h` 是 WPD 的 `PROPERTYKEY` 常量唯一的权威来源，凭记忆写 GUID 会静默出错。装完 SDK 后 Rust 也能自动探测到非标准路径安装的 VS（实测：`F:\vs2019` 无需手动加载 vcvars） |
+| WebView2 运行时 | Win10/11 一般自带 |
 | Node ≥ 22、git | |
+| ffmpeg | 开发期用完整构建即可（`winget install Gyan.FFmpeg`）。**版本要与既有的实测记录对齐**，见下方 |
+
+### 本机环境快照（2026-09-18 就绪）
+
+> 下面是某一台具体机器的状态，**换机后必须重新核对**，不要直接采信。
+
+- Rust `1.98.1`（`cargo` / `clippy 0.1.98` / `rustfmt 1.9.0`）
+- Windows SDK `10.0.26100`，头文件在
+  `C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um\PortableDevice.h`
+- ffmpeg `9.0.1-full_build`（gyan.dev），路径：
+  `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build\bin\ffmpeg.exe`
+- 跑冒烟测试时设 `$env:LIVEPORTER_FFMPEG` 指向上面这个路径
+
+**注意**：阶段 4 的实测记录用的是 `9.0.1-**essentials**_build`，本机装的是 `full_build`（超集）。
+两者都含 `libwebp` / `libx264` / `hevc`，已实测冒烟通过。
 
 ## 需要安装的 skills（全局，不在仓库内）
 
@@ -137,13 +162,31 @@ npx skills add nodnarbnitram/claude-code-extensions@tauri-v2 -g -y
 
 其中 `tauri-v2` 的来源仓库 star 数很少，**只当参考，不当事实来源**；Tauri 2 的 API 以官方文档为准。
 
-## 目录结构（规划，尚未创建）
+## 目录结构（实际）
 
 ```
 livephoto-manager/
 ├── Cargo.toml                    workspace 根
-├── crates/probe/                 计划 1：阶段 0 探测程序
-├── src-tauri/                    计划 2 起：Tauri 核心
-├── src/                          计划 2 起：Vue 前端
-└── docs/superpowers/             设计文档与计划
+├── LICENSE                       GPL-3.0-or-later
+├── THIRD_PARTY_NOTICES.md        第三方声明（ffmpeg 等）
+├── crates/probe/                 阶段 0：WPD 只读探测程序
+├── src-tauri/                    阶段 1 起：Tauri 核心（Rust）
+│   └── src/
+│       ├── db.rs                 SQLite 索引
+│       ├── library.rs            库目录结构与路径
+│       ├── indexer.rs            扫描 originals/ 建索引
+│       ├── importer.rs           导入管道（状态机 + 断点续传）
+│       ├── pairing.rs            主名配对
+│       ├── device/               WPD 访问（keys.rs / transfer.rs）
+│       ├── ffmpeg.rs             ffmpeg 定位与参数构造
+│       ├── thumb.rs              缩略图 / 预览片生成
+│       ├── protocol.rs           lpm:// 自定义协议
+│       ├── commands.rs           Tauri 命令
+│       └── state.rs              应用状态
+├── src/                          阶段 1 起：Vue 前端
+│   ├── components/PhotoGrid.vue  虚拟滚动网格
+│   ├── composables/useZoom.ts    Ctrl+滚轮缩放
+│   ├── lib/lpm.ts                lpm:// 协议封装
+│   └── stores/{import,library}.ts
+└── docs/superpowers/             设计文档、计划、实测记录
 ```
