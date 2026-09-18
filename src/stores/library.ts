@@ -92,6 +92,10 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
+  async function exportDiagnostics(): Promise<string> {
+    return await invoke<string>("export_diagnostics");
+  }
+
   async function refresh() {
     stats.value = await invoke<LibraryStats>("library_stats");
     // 本计划先一次性取前 5000 条；分页 + 虚拟滚动的联动属后续计划。
@@ -112,6 +116,7 @@ export const useLibrary = defineStore("library", () => {
     rescan,
     generateThumbs,
     classify,
+    exportDiagnostics,
     refresh,
   };
 });

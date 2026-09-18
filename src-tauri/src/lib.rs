@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod device;
+mod diagnostics;
 mod ffmpeg;
 mod importer;
 mod indexer;
@@ -63,6 +64,7 @@ pub fn run() {
             commands::cancel_import,
             commands::ensure_preview,
             commands::classify_library,
+            commands::export_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

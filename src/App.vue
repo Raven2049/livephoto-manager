@@ -13,6 +13,15 @@ const zoom = useZoom(5);
 const grid = ref<InstanceType<typeof PhotoGrid> | null>(null);
 const main = ref<HTMLElement | null>(null);
 const assumeCloud = ref(false);
+const diagPath = ref<string | null>(null);
+
+async function exportDiag() {
+  try {
+    diagPath.value = await lib.exportDiagnostics();
+  } catch (e) {
+    diagPath.value = String(e);
+  }
+}
 
 // 全局唯一一个 <video>（设计 §8.1 决定 1），由 hover 事件定位到目标瓦片。
 const videoEl = ref<HTMLVideoElement | null>(null);
@@ -115,6 +124,7 @@ onBeforeUnmount(() => {
       <button :disabled="!lib.root || lib.busy" @click="lib.rescan">重建索引</button>
       <button :disabled="!lib.root || lib.busy" @click="lib.generateThumbs">生成缩略图</button>
       <button :disabled="!lib.root || lib.busy" @click="lib.classify">校验标识</button>
+      <button :disabled="!lib.root || lib.busy" @click="exportDiag">导出诊断</button>
       <button :disabled="!lib.root || imp.running" @click="importFromDevice">
         从 iPhone 导入
       </button>
@@ -141,6 +151,7 @@ onBeforeUnmount(() => {
         }}
       </span>
       <span v-else>未打开库</span>
+      <span v-if="diagPath" class="prog">报告: {{ diagPath }}</span>
     </header>
     <main ref="main">
       <PhotoGrid

@@ -346,6 +346,25 @@ pub fn assets_for_classify(conn: &Connection) -> rusqlite::Result<Vec<ClassifyJo
     rows.collect()
 }
 
+/// 取第一条设备记录（型号, 序列号），供诊断报告。
+pub fn first_device(conn: &Connection) -> rusqlite::Result<Option<(String, String)>> {
+    conn.query_row(
+        "SELECT model, serial FROM device ORDER BY id LIMIT 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+}
+
+/// 取失败条目的错误原文（设计 §10.2）。
+pub fn failed_errors(conn: &Connection, limit: i64) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT error FROM asset WHERE error IS NOT NULL AND error <> '' ORDER BY updated_at DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], |r| r.get::<_, String>(0))?;
+    rows.collect()
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AssetRow {
     pub id: i64,

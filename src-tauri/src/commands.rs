@@ -206,6 +206,67 @@ pub fn cancel_import(state: tauri::State<'_, AppState>) {
     state.request_cancel();
 }
 
+/// 生成诊断报告（设计 §10.2），写到库根 `.lpm/diagnostics-<时间>.txt`，返回路径。
+/// 不含照片内容与文件路径；设备序列号打码。
+#[tauri::command]
+pub async fn export_diagnostics(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<String> {
+        let lib = Library::open(&root)?;
+        let conn = crate::db::open(&lib.db_path())?;
+
+        let (model, serial) = match crate::db::first_device(&conn)? {
+            Some((m, s)) => (Some(m), Some(s)),
+            None => (None, None),
+        };
+        let stats = crate::db::stats(&conn)?;
+        let integrity_counts = stats
+            .by_integrity
+            .iter()
+            .map(|(k, n)| (*k, *n as usize))
+            .collect();
+        let failed_errors = crate::db::failed_errors(&conn, 50)?;
+
+        let windows_version = std::process::Command::new("cmd")
+            .args(["/c", "ver"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        let ffmpeg_version = crate::ffmpeg::find_ffmpeg()
+            .ok()
+            .and_then(|p| std::process::Command::new(p).arg("-version").output().ok())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .unwrap_or_default();
+
+        let input = crate::diagnostics::DiagnosticsInput {
+            device_model: model,
+            serial_masked: serial.as_deref().map(crate::diagnostics::mask),
+            files_total: stats.total as usize,
+            integrity_counts,
+            failed_errors,
+            windows_version,
+            ffmpeg_version,
+        };
+
+        let text = crate::diagnostics::render(&input);
+        let path = lib
+            .meta_dir()
+            .join(format!("diagnostics-{}.txt", crate::db::now_epoch()));
+        std::fs::write(&path, text)?;
+        Ok(path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ClassifySummary {
     pub total: usize,
