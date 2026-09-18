@@ -118,8 +118,10 @@ api-ms-win-crt-{string,math,heap,utility,time,runtime,convert,stdio,locale}-l1-1
 - 验收中发现并修复两个 bug（详见 `2026-09-18-browse-smoke.md`）：
   1. 子进程弹黑框（`ffmpeg::command` 加 `CREATE_NO_WINDOW`）；
   2. 重扫因设备行重复导致「未知日期」（`db::device_id_for_folder` 复用已有设备）。
-- 修复版重新打包：`LivePorter-1.0.0-windows-x64.zip`，SHA256
+- 修复版重新打包（含无黑框 + 设备复用修复）：SHA256
   `5F5C3053A2984B5CC76A2849809A860542E555A47C9790DA682D7D444F470DD9`。
+- **阶段 9 界面改版后再次打包**（当前最新）：zip **7.61 MB**，SHA256
+  `D4E42AE1001C64B6BA6F427DC3D3F294EFBA1C91F15A4DC73FA5087FE9B8FEA7`。
 - 未做：注册表无写入抽查（未单独验证）。
 
 ## Task 7：发布流程
