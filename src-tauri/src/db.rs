@@ -438,6 +438,9 @@ pub struct AssetRow {
     pub movie_path: Option<String>,
     pub thumb_path: Option<String>,
     pub missing: bool,
+    /// 缩略图尺寸（命令层读文件头填充，用于瀑布流；不入库）。
+    pub thumb_w: Option<i64>,
+    pub thumb_h: Option<i64>,
 }
 
 /// 转义 SQLite LIKE 的通配符（`%` `_` `\`），配合 `ESCAPE '\'` 使用。
@@ -514,6 +517,8 @@ fn map_asset_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AssetRow> {
         movie_path: r.get(6)?,
         thumb_path: r.get(7)?,
         missing: r.get::<_, i64>(8)? != 0,
+        thumb_w: None,
+        thumb_h: None,
     })
 }
 
@@ -600,6 +605,8 @@ pub struct LibraryStats {
     pub photo: i64,
     pub video: i64,
     pub missing: i64,
+    /// 文件存在但缺缩略图的条目数（用于自动补缩略图）。
+    pub missing_thumbs: i64,
     /// (integrity 值, 数量)，按值升序。用于展示异常项分布。
     pub by_integrity: Vec<(i64, i64)>,
 }
@@ -622,7 +629,8 @@ pub fn stats(conn: &Connection) -> rusqlite::Result<LibraryStats> {
            coalesce(sum(CASE WHEN kind=3 THEN 1 ELSE 0 END),0),
            coalesce(sum(CASE WHEN kind=1 THEN 1 ELSE 0 END),0),
            coalesce(sum(CASE WHEN kind=2 THEN 1 ELSE 0 END),0),
-           coalesce(sum(missing),0)
+           coalesce(sum(missing),0),
+           coalesce(sum(CASE WHEN missing=0 AND (thumb_path IS NULL OR thumb_path='') THEN 1 ELSE 0 END),0)
          FROM asset",
         [],
         |r| {
@@ -632,6 +640,7 @@ pub fn stats(conn: &Connection) -> rusqlite::Result<LibraryStats> {
                 photo: r.get(2)?,
                 video: r.get(3)?,
                 missing: r.get(4)?,
+                missing_thumbs: r.get(5)?,
                 by_integrity,
             })
         },

@@ -58,6 +58,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::open_library,
+            commands::recent_libraries,
+            commands::forget_library,
             commands::scan_library,
             commands::library_stats,
             commands::list_assets,
@@ -66,7 +68,9 @@ pub fn run() {
             commands::import_from_device,
             commands::generate_thumbs,
             commands::cancel_import,
+            commands::cancel_scan,
             commands::ensure_preview,
+            commands::ensure_large,
             commands::classify_library,
             commands::export_diagnostics,
             commands::export_assets,

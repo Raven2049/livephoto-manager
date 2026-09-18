@@ -8,6 +8,8 @@ pub struct Library {
 pub const ORIGINALS: &str = "originals";
 pub const THUMBS: &str = "thumbs";
 pub const PREVIEWS: &str = "previews";
+/// 高分大图缓存（单列浏览用，按需生成）。
+pub const LARGES: &str = "larges";
 pub const META_DIR: &str = ".lpm";
 pub const DB_FILE: &str = "index.db";
 
@@ -33,6 +35,9 @@ impl Library {
     pub fn previews_dir(&self) -> PathBuf {
         self.root.join(PREVIEWS)
     }
+    pub fn larges_dir(&self) -> PathBuf {
+        self.root.join(LARGES)
+    }
     pub fn meta_dir(&self) -> PathBuf {
         self.root.join(META_DIR)
     }
@@ -45,6 +50,7 @@ impl Library {
             self.originals_dir(),
             self.thumbs_dir(),
             self.previews_dir(),
+            self.larges_dir(),
             self.meta_dir(),
         ] {
             std::fs::create_dir_all(&dir)?;

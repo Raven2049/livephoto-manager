@@ -116,6 +116,29 @@ pub fn preview_args(input: &Path, output: &Path) -> Vec<String> {
     ]
 }
 
+/// 生成单列浏览用的大图：宽度最多 2000px、WebP q90；比原图小就不放大。
+pub fn large_args(input: &Path, output: &Path) -> Vec<String> {
+    vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-y".into(),
+        "-i".into(),
+        input.to_string_lossy().into_owned(),
+        "-filter_complex".into(),
+        "scale=w='min(2000,iw)':h=-2".into(),
+        "-frames:v".into(),
+        "1".into(),
+        "-c:v".into(),
+        "libwebp".into(),
+        "-q:v".into(),
+        "90".into(),
+        "-f".into(),
+        "webp".into(),
+        output.to_string_lossy().into_owned(),
+    ]
+}
+
 /// 与 ffmpeg 同目录的 ffprobe。
 pub fn find_ffprobe() -> anyhow::Result<PathBuf> {
     let ff = find_ffmpeg()?;
@@ -206,6 +229,14 @@ mod tests {
         assert!(a.contains(&"-an".to_string()));
         assert!(a.contains(&"6".to_string()));
         assert_eq!(a.last().unwrap(), "out.mp4.part");
+    }
+
+    #[test]
+    fn large_args_cap_width_and_encode_webp() {
+        let a = large_args(Path::new("in.heic"), Path::new("out.webp.part"));
+        assert!(a.iter().any(|x| x.contains("min(2000,iw)")));
+        assert!(a.contains(&"libwebp".to_string()));
+        assert_eq!(a.last().unwrap(), "out.webp.part");
     }
 
     #[test]

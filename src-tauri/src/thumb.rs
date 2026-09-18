@@ -30,6 +30,72 @@ pub fn thumb_file_name(hash: &str) -> String {
     format!("{hash}.webp")
 }
 
+/// 读取图片尺寸（仅 WebP）。用于瀑布流布局；只读文件头，不解码。
+pub fn read_image_size(path: &Path) -> Option<(u32, u32)> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 64];
+    let n = f.read(&mut head).ok()?;
+    webp_size(&head[..n])
+}
+
+/// 解析 WebP 尺寸，支持 VP8（有损）/ VP8L（无损）/ VP8X（扩展）。
+pub fn webp_size(b: &[u8]) -> Option<(u32, u32)> {
+    if b.len() < 12 || &b[0..4] != b"RIFF" || &b[8..12] != b"WEBP" {
+        return None;
+    }
+    let mut i = 12usize;
+    while i + 8 <= b.len() {
+        let fourcc = &b[i..i + 4];
+        let size = u32::from_le_bytes(b[i + 4..i + 8].try_into().ok()?) as usize;
+        let start = i + 8;
+        let end = start.checked_add(size)?;
+        if end > b.len() {
+            return None;
+        }
+        let data = &b[start..end];
+        match fourcc {
+            b"VP8 " => return vp8_size(data),
+            b"VP8L" => return vp8l_size(data),
+            b"VP8X" => return vp8x_size(data),
+            _ => {}
+        }
+        // RIFF 块按偶数字节对齐
+        i = end + (size & 1);
+    }
+    None
+}
+
+fn vp8_size(d: &[u8]) -> Option<(u32, u32)> {
+    if d.len() < 10 || d[3..6] != [0x9d, 0x01, 0x2a] {
+        return None;
+    }
+    let w = u16::from_le_bytes([d[6], d[7]]) & 0x3fff;
+    let h = u16::from_le_bytes([d[8], d[9]]) & 0x3fff;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some((w as u32, h as u32))
+}
+
+fn vp8l_size(d: &[u8]) -> Option<(u32, u32)> {
+    if d.len() < 5 || d[0] != 0x2f {
+        return None;
+    }
+    let bits = u32::from_le_bytes([d[1], d[2], d[3], d[4]]);
+    let w = (bits & 0x3fff) + 1;
+    let h = ((bits >> 14) & 0x3fff) + 1;
+    Some((w, h))
+}
+
+fn vp8x_size(d: &[u8]) -> Option<(u32, u32)> {
+    if d.len() < 10 {
+        return None;
+    }
+    let w = 1 + (d[4] as u32 | (d[5] as u32) << 8 | (d[6] as u32) << 16);
+    let h = 1 + (d[7] as u32 | (d[8] as u32) << 8 | (d[9] as u32) << 16);
+    Some((w, h))
+}
+
 fn make(ffmpeg_bin: &Path, input: &Path, thumbs_dir: &Path, movie: bool) -> Result<PathBuf> {
     std::fs::create_dir_all(thumbs_dir)?;
     let out = thumbs_dir.join(thumb_file_name(&content_hash(input)?));
@@ -64,6 +130,30 @@ pub fn make_thumb_for_movie(ffmpeg_bin: &Path, input: &Path, thumbs_dir: &Path) 
     make(ffmpeg_bin, input, thumbs_dir, true)
 }
 
+/// 高分大图文件名：`<hash>.webp`（放在 `larges/`，与缩略图同扩展名但目录不同）。
+pub fn large_file_name(hash: &str) -> String {
+    format!("{hash}.webp")
+}
+
+/// 生成单列浏览用的大图（按需）。已存在则复用。
+pub fn make_large(ffmpeg_bin: &Path, input: &Path, larges_dir: &Path) -> Result<PathBuf> {
+    std::fs::create_dir_all(larges_dir)?;
+    let out = larges_dir.join(large_file_name(&content_hash(input)?));
+    if out.is_file() {
+        return Ok(out);
+    }
+    let mut tmp = out.clone().into_os_string();
+    tmp.push(".part");
+    let tmp = PathBuf::from(tmp);
+
+    if let Err(e) = ffmpeg::run(ffmpeg_bin, &ffmpeg::large_args(input, &tmp)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    std::fs::rename(&tmp, &out)?;
+    Ok(out)
+}
+
 /// 预览片文件名：`<hash>.mp4`。
 pub fn preview_file_name(hash: &str) -> String {
     format!("{hash}.mp4")
@@ -95,6 +185,56 @@ pub fn make_preview_for_movie(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chunk(fourcc: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut c = Vec::new();
+        c.extend_from_slice(fourcc);
+        c.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        c.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            c.push(0);
+        }
+        c
+    }
+    fn riff(ch: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(b"RIFF");
+        v.extend_from_slice(&((4 + ch.len()) as u32).to_le_bytes());
+        v.extend_from_slice(b"WEBP");
+        v.extend_from_slice(ch);
+        v
+    }
+
+    #[test]
+    fn webp_size_reads_vp8x() {
+        let mut data = vec![0u8; 4]; // flags + reserved
+        data.extend_from_slice(&511u32.to_le_bytes()[..3]); // width-1 = 511
+        data.extend_from_slice(&383u32.to_le_bytes()[..3]); // height-1 = 383
+        assert_eq!(webp_size(&riff(&chunk(b"VP8X", &data))), Some((512, 384)));
+    }
+
+    #[test]
+    fn webp_size_reads_vp8() {
+        let mut data = vec![0u8; 3]; // frame tag
+        data.extend_from_slice(&[0x9d, 0x01, 0x2a]);
+        data.extend_from_slice(&320u16.to_le_bytes());
+        data.extend_from_slice(&240u16.to_le_bytes());
+        assert_eq!(webp_size(&riff(&chunk(b"VP8 ", &data))), Some((320, 240)));
+    }
+
+    #[test]
+    fn webp_size_reads_vp8l() {
+        let bits: u32 = 199 | (99 << 14);
+        let mut data = vec![0x2f];
+        data.extend_from_slice(&bits.to_le_bytes());
+        assert_eq!(webp_size(&riff(&chunk(b"VP8L", &data))), Some((200, 100)));
+    }
+
+    #[test]
+    fn webp_size_rejects_non_webp() {
+        assert_eq!(webp_size(b"not a webp file"), None);
+        assert_eq!(webp_size(b""), None);
+    }
 
     #[test]
     fn hash_is_stable_and_content_sensitive() {

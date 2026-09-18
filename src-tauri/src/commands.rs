@@ -8,21 +8,133 @@ use crate::importer::{self, DeviceFile, ImportProgress, Thumbs, Transfer};
 use crate::library::Library;
 use crate::state::AppState;
 
-#[tauri::command]
-pub fn open_library(path: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state
-        .open(std::path::PathBuf::from(path))
-        .map_err(|e| e.to_string())
+/// 最近打开过的资料库（持久化在 exe 同目录的 `recent.json`，不写系统目录）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RecentEntry {
+    path: String,
+    name: String,
+    last_opened: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RecentLibrary {
+    pub path: String,
+    pub name: String,
+    pub last_opened: i64,
+    /// 目录当前是否还存在（可能被移动/删除）。
+    pub exists: bool,
+}
+
+fn recent_file() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join("recent.json"))
+}
+
+fn read_recent() -> Vec<RecentEntry> {
+    let Some(f) = recent_file() else {
+        return Vec::new();
+    };
+    std::fs::read_to_string(f)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn write_recent(list: &[RecentEntry]) {
+    let Some(f) = recent_file() else {
+        return;
+    };
+    if let Ok(text) = serde_json::to_string_pretty(list) {
+        let _ = std::fs::write(f, text);
+    }
+}
+
+fn with_exists(list: Vec<RecentEntry>) -> Vec<RecentLibrary> {
+    list.into_iter()
+        .map(|r| RecentLibrary {
+            exists: Path::new(&r.path).is_dir(),
+            path: r.path,
+            name: r.name,
+            last_opened: r.last_opened,
+        })
+        .collect()
+}
+
+fn record_recent(path: &Path, name: &str) {
+    let mut list = read_recent();
+    list.retain(|r| r.path != path.to_string_lossy());
+    list.insert(
+        0,
+        RecentEntry {
+            path: path.to_string_lossy().to_string(),
+            name: name.to_string(),
+            last_opened: crate::db::now_epoch(),
+        },
+    );
+    list.truncate(8);
+    write_recent(&list);
 }
 
 #[tauri::command]
-pub fn scan_library(
+pub fn recent_libraries() -> Vec<RecentLibrary> {
+    with_exists(read_recent())
+}
+
+#[tauri::command]
+pub fn forget_library(path: String) -> Vec<RecentLibrary> {
+    let mut list = read_recent();
+    list.retain(|r| r.path != path);
+    write_recent(&list);
+    with_exists(list)
+}
+
+#[tauri::command]
+pub fn open_library(path: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    // 必须是已存在的目录：避免「最近资料库」被移动后误建一个空库。
+    if !p.is_dir() {
+        return Err("目录不存在或已被移动".to_string());
+    }
+    state.open(p.clone()).map_err(|e| e.to_string())?;
+    let name = p
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.clone());
+    record_recent(&p, &name);
+    Ok(())
+}
+
+/// 扫描 `originals/` 重建索引。
+///
+/// **必须异步 + `spawn_blocking`**：大库枚举磁盘可能耗时很久，同步命令会跑在
+/// 主线程上，直接冻结窗口（曾实测「未响应」）。这里另开一个 DB 连接，不占用
+/// `AppState` 里那个带锁的连接。
+#[tauri::command]
+pub async fn scan_library(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<crate::indexer::ScanSummary, String> {
-    state
-        .with(crate::indexer::scan_library)
-        .ok_or_else(|| "库未打开".to_string())?
-        .map_err(|e| e.to_string())
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+    state.reset_cancel();
+    let cancel = state.cancel_flag();
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<crate::indexer::ScanSummary> {
+        let lib = Library::open(&root)?;
+        let conn = crate::db::open(&lib.db_path())?;
+        let should_cancel = || cancel.load(std::sync::atomic::Ordering::SeqCst);
+        let emit_app = app.clone();
+        crate::indexer::scan_library_with(&lib, &conn, &should_cancel, |p| {
+            let _ = emit_app.emit("scan://progress", p);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
+}
+
+/// 请求停止当前的重建索引。
+#[tauri::command]
+pub fn cancel_scan(state: tauri::State<'_, AppState>) {
+    state.request_cancel();
 }
 
 #[tauri::command]
@@ -33,18 +145,34 @@ pub fn library_stats(state: tauri::State<'_, AppState>) -> Result<crate::db::Lib
         .map_err(|e| e.to_string())
 }
 
+/// 分页取条目。异步 + `spawn_blocking`：会读取缩略图文件头拿尺寸（瀑布流用），
+/// 不能跑在主线程上。
 #[tauri::command]
-pub fn list_assets(
+pub async fn list_assets(
     offset: i64,
     limit: i64,
     filter: Option<crate::db::AssetFilter>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<crate::db::AssetRow>, String> {
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
     let f = filter.unwrap_or_default();
-    state
-        .with(|_, conn| crate::db::page_assets_filtered(conn, &f, offset, limit))
-        .ok_or_else(|| "库未打开".to_string())?
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<Vec<crate::db::AssetRow>> {
+        let lib = Library::open(&root)?;
+        let conn = crate::db::open(&lib.db_path())?;
+        let mut rows = crate::db::page_assets_filtered(&conn, &f, offset, limit)?;
+        for r in &mut rows {
+            if let Some(p) = r.thumb_path.as_deref() {
+                if let Some((w, h)) = crate::thumb::read_image_size(Path::new(p)) {
+                    r.thumb_w = Some(w as i64);
+                    r.thumb_h = Some(h as i64);
+                }
+            }
+        }
+        Ok(rows)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -575,6 +703,37 @@ pub async fn classify_library(
         }
 
         Ok(ClassifySummary { total, changed })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
+}
+
+/// 确保某条目的高分大图存在（单列浏览用）；返回其绝对路径。
+/// 源优先静态图，其次视频首帧；由 ffmpeg 生成 WebP 并缓存。
+#[tauri::command]
+pub async fn ensure_large(
+    asset_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<String> {
+        let lib = Library::open(&root)?;
+        let conn = crate::db::open(&lib.db_path())?;
+        let files = crate::db::assets_by_ids(&conn, &[asset_id])?;
+        let f = files
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("条目不存在"))?;
+        let source = f
+            .still_path
+            .clone()
+            .or_else(|| f.movie_path.clone())
+            .ok_or_else(|| anyhow::anyhow!("该条目没有可用的源文件"))?;
+        let bin = crate::ffmpeg::find_ffmpeg()?;
+        let p = crate::thumb::make_large(&bin, Path::new(&source), &lib.larges_dir())?;
+        Ok(p.to_string_lossy().to_string())
     })
     .await
     .map_err(|e| e.to_string())?
