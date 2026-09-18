@@ -116,6 +116,42 @@ pub fn preview_args(input: &Path, output: &Path) -> Vec<String> {
     ]
 }
 
+/// 与 ffmpeg 同目录的 ffprobe。
+pub fn find_ffprobe() -> anyhow::Result<PathBuf> {
+    let ff = find_ffmpeg()?;
+    let probe = ff.with_file_name("ffprobe.exe");
+    if probe.is_file() {
+        return Ok(probe);
+    }
+    anyhow::bail!("未找到 ffprobe.exe（应与 ffmpeg.exe 同目录）")
+}
+
+/// 读取视频 ContentIdentifier 的 ffprobe 参数。
+pub fn movie_content_id_args(input: &Path) -> Vec<String> {
+    vec![
+        "-v".into(),
+        "error".into(),
+        "-show_entries".into(),
+        "format_tags=com.apple.quicktime.content.identifier".into(),
+        "-of".into(),
+        "default=nw=1:nk=1".into(),
+        input.to_string_lossy().into_owned(),
+    ]
+}
+
+/// 运行 ffprobe 并返回 stdout 文本。
+pub fn run_capture(probe: &Path, args: &[String]) -> anyhow::Result<String> {
+    let out = std::process::Command::new(probe).args(args).output()?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "ffprobe 失败 ({}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 /// 执行 ffmpeg，失败时带上 stderr。
 pub fn run(ffmpeg: &Path, args: &[String]) -> anyhow::Result<()> {
     let output = std::process::Command::new(ffmpeg).args(args).output()?;
@@ -157,5 +193,26 @@ mod tests {
         assert!(a.contains(&"-an".to_string()));
         assert!(a.contains(&"6".to_string()));
         assert_eq!(a.last().unwrap(), "out.mp4.part");
+    }
+
+    #[test]
+    fn movie_id_args_request_only_the_key() {
+        let a = movie_content_id_args(Path::new("in.mov"));
+        assert!(a
+            .iter()
+            .any(|x| x.contains("com.apple.quicktime.content.identifier")));
+        assert_eq!(a.last().unwrap(), "in.mov");
+    }
+
+    /// 需要本机有 ffmpeg/ffprobe：设 LIVEPORTER_FFMPEG 与 LPM_MOVIE_ID_INPUT 后跑
+    ///   cargo test -p liveporter real_movie_content_id_smoke -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires ffprobe"]
+    fn real_movie_content_id_smoke() {
+        let probe = find_ffprobe().unwrap();
+        let input = std::env::var("LPM_MOVIE_ID_INPUT").expect("设 LPM_MOVIE_ID_INPUT");
+        let text = run_capture(&probe, &movie_content_id_args(Path::new(&input))).unwrap();
+        println!("content id = {:?}", text.trim());
+        assert!(!text.trim().is_empty(), "ffprobe 未输出 content identifier");
     }
 }
