@@ -25,7 +25,8 @@
 | 缩略图实测 | `docs/superpowers/notes/2026-09-17-thumbs-smoke.md` | 阶段 4 缩略图实测（含 `VT_DATE` 与 `-filter_complex` 两个修复） |
 | 计划 6 | `docs/superpowers/plans/2026-09-18-stage5-previews.md` | 阶段 5：预览片 + 悬停播放（**已完成**） |
 | 预览实测 | `docs/superpowers/notes/2026-09-18-preview-smoke.md` | 阶段 5 合成库实测（**本轮用合成素材，真实 iPhone 素材待补**） |
-| 计划 7+ | 尚未编写 | UUID 校验 + 异常分类 + 诊断 + iCloud 检测；浏览体验与 UI；打包分发 |
+| 计划 7 | `docs/superpowers/plans/2026-09-18-stage6-integrity-diagnostics.md` | 阶段 6：UUID 校验 + 异常分类 + iCloud 手动开关 + 诊断报告（**尚未实施**） |
+| 计划 8+ | 尚未编写 | 浏览体验与 UI（时间线/搜索/导出/删除）；打包分发 |
 
 ## 当前进度
 
@@ -41,7 +42,7 @@
   悬停播放、快速划过不触发、滚动/缩放不触发、DevTools 确认只有一个 `<video>`，均已实测通过
 - [ ] 计划 7+ 尚未编写
 
-**下一步：编写计划 7（UUID 校验 + 异常分类 + 诊断报告 + iCloud 检测，对应设计 §6.4 / §10）。**
+**下一步：计划 7（阶段 6：UUID 校验 + 异常分类 + iCloud 手动开关 + 诊断报告）已写好，等待过审。**过审后从 Task 0（真机确认 content identifier 两条读取路径）开始。三处需确认的取舍见计划文末「已知风险与取舍」。
 
 ### 真机验证（已在 2026-09-18 补齐）
 
