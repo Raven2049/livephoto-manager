@@ -139,9 +139,22 @@ pub fn movie_content_id_args(input: &Path) -> Vec<String> {
     ]
 }
 
+/// 构造子进程命令。Windows 上加 `CREATE_NO_WINDOW`，否则 GUI 程序
+/// （`windows_subsystem = "windows"`）每 spawn 一个 ffmpeg/ffprobe 都会闪一下黑框。
+pub(crate) fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// 运行 ffprobe 并返回 stdout 文本。
 pub fn run_capture(probe: &Path, args: &[String]) -> anyhow::Result<String> {
-    let out = std::process::Command::new(probe).args(args).output()?;
+    let out = command(probe).args(args).output()?;
     if !out.status.success() {
         anyhow::bail!(
             "ffprobe 失败 ({}): {}",
@@ -154,7 +167,7 @@ pub fn run_capture(probe: &Path, args: &[String]) -> anyhow::Result<String> {
 
 /// 执行 ffmpeg，失败时带上 stderr。
 pub fn run(ffmpeg: &Path, args: &[String]) -> anyhow::Result<()> {
-    let output = std::process::Command::new(ffmpeg).args(args).output()?;
+    let output = command(ffmpeg).args(args).output()?;
     if !output.status.success() {
         anyhow::bail!(
             "ffmpeg 失败 ({}): {}",
@@ -202,6 +215,14 @@ mod tests {
             .iter()
             .any(|x| x.contains("com.apple.quicktime.content.identifier")));
         assert_eq!(a.last().unwrap(), "in.mov");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_helper_hides_console_and_runs() {
+        let out = command("cmd").args(["/c", "echo", "lpm"]).output().unwrap();
+        assert!(out.status.success());
+        assert!(String::from_utf8_lossy(&out.stdout).contains("lpm"));
     }
 
     /// 需要本机有 ffmpeg/ffprobe：设 LIVEPORTER_FFMPEG 与 LPM_MOVIE_ID_INPUT 后跑

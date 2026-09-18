@@ -10,6 +10,9 @@ dist-ssr/
 target/
 src-tauri/target/
 
+# 绿色版打包产物
+dist-portable/
+
 # 开发期 ffmpeg 二进制（不提交；来源与许可见 THIRD_PARTY_NOTICES.md）
 src-tauri/ffmpeg.exe
 src-tauri/resources/
