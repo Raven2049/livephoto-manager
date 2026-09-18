@@ -25,8 +25,9 @@
 | 缩略图实测 | `docs/superpowers/notes/2026-09-17-thumbs-smoke.md` | 阶段 4 缩略图实测（含 `VT_DATE` 与 `-filter_complex` 两个修复） |
 | 计划 6 | `docs/superpowers/plans/2026-09-18-stage5-previews.md` | 阶段 5：预览片 + 悬停播放（**已完成**） |
 | 预览实测 | `docs/superpowers/notes/2026-09-18-preview-smoke.md` | 阶段 5 合成库实测（**本轮用合成素材，真实 iPhone 素材待补**） |
-| 计划 7 | `docs/superpowers/plans/2026-09-18-stage6-integrity-diagnostics.md` | 阶段 6：UUID 校验 + 异常分类 + iCloud 手动开关 + 诊断报告（**尚未实施**） |
-| 计划 8+ | 尚未编写 | 浏览体验与 UI（时间线/搜索/导出/删除）；打包分发 |
+| 计划 7 | `docs/superpowers/plans/2026-09-18-stage6-integrity-diagnostics.md` | 阶段 6：UUID 校验 + 异常分类 + iCloud 手动开关 + 诊断报告（**已完成**） |
+| 校验实测 | `docs/superpowers/notes/2026-09-18-integrity-smoke.md` | 阶段 6 真机实测（含 content-id 探测记录同目录） |
+| 计划 8+ | 尚未编写 | 浏览体验与 UI（时间线/搜索/导出/删除）；打包分发（绿色版） |
 
 ## 当前进度
 
@@ -40,9 +41,11 @@
 - [x] **计划 5（阶段 4 ffmpeg 集成 + 缩略图）编写并实现完成**：HEIC→512px WebP、导入时生成、状态推进到 `transcoded`、网格显示缩略图（已用户确认）；顺带修复 `taken_at`（`VT_DATE` 解析）
 - [x] **计划 6（阶段 5 预览片 + 悬停播放）编写并实现完成**：后端 `ensure_preview` + 前端单例 `<video>`；
   悬停播放、快速划过不触发、滚动/缩放不触发、DevTools 确认只有一个 `<video>`，均已实测通过
-- [ ] 计划 7+ 尚未编写
+- [x] **计划 7（阶段 6 UUID 校验 + 异常分类 + iCloud 手动开关 + 诊断报告）编写并实现完成**：真实 iPhone 上
+  `content_id` 两侧一致、`integrity=0`；回填命令与诊断导出均实测通过
+- [ ] 计划 8+ 尚未编写
 
-**下一步：计划 7（阶段 6：UUID 校验 + 异常分类 + iCloud 手动开关 + 诊断报告）已写好，等待过审。**过审后从 Task 0（真机确认 content identifier 两条读取路径）开始。三处需确认的取舍见计划文末「已知风险与取舍」。
+**下一步：编写计划 8（浏览体验与 UI：时间线分组、搜索筛选、多选导出、从库删除）。**对应设计 §9；之后是计划 9（打包分发，绿色版，见设计 §11 与决策 20）。
 
 ### 真机验证（已在 2026-09-18 补齐）
 
