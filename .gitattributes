@@ -1,0 +1,24 @@
+# 仓库内统一用 LF，检出时不做 CRLF 转换。
+#
+# 不加这一条时，Windows 上默认的 core.autocrlf=true 会把工作区文件改写成 CRLF，
+# 于是 git status 会出现一堆其实没有任何内容变化的 " M"。
+# 已实测踩过：src-tauri/Cargo.toml 反复显示被修改，但 git diff 是空的。
+* text=auto eol=lf
+
+# 二进制文件不做换行符转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.webp binary
+*.mov binary
+*.mp4 binary
+*.heic binary
+*.exe binary
+*.dll binary
+
+# Windows 批处理文件必须是 CRLF，否则无法执行
+*.bat text eol=crlf
+*.cmd text eol=crlf
