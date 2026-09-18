@@ -62,6 +62,7 @@ pub fn run() {
             commands::generate_thumbs,
             commands::cancel_import,
             commands::ensure_preview,
+            commands::classify_library,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

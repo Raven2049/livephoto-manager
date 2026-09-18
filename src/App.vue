@@ -12,6 +12,7 @@ const imp = useImport();
 const zoom = useZoom(5);
 const grid = ref<InstanceType<typeof PhotoGrid> | null>(null);
 const main = ref<HTMLElement | null>(null);
+const assumeCloud = ref(false);
 
 // 全局唯一一个 <video>（设计 §8.1 决定 1），由 hover 事件定位到目标瓦片。
 const videoEl = ref<HTMLVideoElement | null>(null);
@@ -25,7 +26,7 @@ async function pickLibrary() {
 }
 
 async function importFromDevice() {
-  await imp.start();
+  await imp.start(assumeCloud.value);
   await lib.refresh();
 }
 
@@ -43,6 +44,16 @@ const imageItems = computed<ImageItem[]>(() =>
     size: 0,
   })),
 );
+
+// 仅在存在异常项（1 不一致 / 2 残缺 / 5 疑似副本）时提示。
+const integrityHint = computed(() => {
+  const s = lib.stats;
+  if (!s) return "";
+  const labels: Record<number, string> = { 1: "不一致", 2: "残缺", 5: "疑似副本" };
+  const abnormal = s.by_integrity.filter(([k]) => k in labels);
+  if (!abnormal.length) return "";
+  return " · 异常 " + abnormal.map(([k, n]) => `${labels[k]}${n}`).join(" ");
+});
 
 const slotStyle = computed(() => {
   const r = hoverRect.value;
@@ -103,9 +114,14 @@ onBeforeUnmount(() => {
       <button @click="pickLibrary">打开库</button>
       <button :disabled="!lib.root || lib.busy" @click="lib.rescan">重建索引</button>
       <button :disabled="!lib.root || lib.busy" @click="lib.generateThumbs">生成缩略图</button>
+      <button :disabled="!lib.root || lib.busy" @click="lib.classify">校验标识</button>
       <button :disabled="!lib.root || imp.running" @click="importFromDevice">
         从 iPhone 导入
       </button>
+      <label class="cloud">
+        <input type="checkbox" v-model="assumeCloud" />
+        原件可能不在手机
+      </label>
       <button v-if="imp.running" @click="imp.stop">停止</button>
       <span v-if="imp.running" class="prog">
         导入中 {{ imp.progress?.done ?? 0 }}/{{ imp.progress?.total ?? "?" }}
@@ -120,7 +136,9 @@ onBeforeUnmount(() => {
       <span v-else-if="imp.error" class="err">{{ imp.error }}</span>
       <span v-else-if="lib.stats">
         共 {{ lib.stats.total }} · 实况 {{ lib.stats.live }} · 照片 {{ lib.stats.photo }} ·
-        视频 {{ lib.stats.video }} · 缺失 {{ lib.stats.missing }} · {{ zoom.columns.value }} 列
+        视频 {{ lib.stats.video }} · 缺失 {{ lib.stats.missing }} · {{ zoom.columns.value }} 列{{
+          integrityHint
+        }}
       </span>
       <span v-else>未打开库</span>
     </header>

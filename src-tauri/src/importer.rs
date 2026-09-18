@@ -234,6 +234,7 @@ pub fn run_tasks(
     transfer: &mut dyn Transfer,
     thumbs: &mut dyn Thumbs,
     ffprobe_bin: Option<&Path>,
+    cloud_hint: bool,
     should_cancel: &dyn Fn() -> bool,
     mut on_progress: impl FnMut(&ImportProgress),
 ) -> anyhow::Result<ImportProgress> {
@@ -403,6 +404,7 @@ pub fn run_tasks(
                     still_id.as_deref(),
                     movie_id.as_deref(),
                     asset.still.as_ref().map(|f| f.size).unwrap_or(0),
+                    cloud_hint,
                 );
                 crate::db::set_content_id(
                     conn,
@@ -605,6 +607,7 @@ mod tests {
             &mut fake,
             &mut thumbs,
             None,
+            false,
             &|| false,
             |_| {},
         )
@@ -674,6 +677,7 @@ mod tests {
             &mut fake,
             &mut thumbs,
             None,
+            false,
             &|| false,
             |_| {},
         )

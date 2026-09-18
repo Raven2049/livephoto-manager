@@ -19,6 +19,7 @@ export interface LibraryStats {
   photo: number;
   video: number;
   missing: number;
+  by_integrity: [number, number][];
 }
 
 /** 供 PhotoGrid 显示的最小结构。 */
@@ -78,6 +79,19 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
+  async function classify() {
+    busy.value = true;
+    error.value = null;
+    try {
+      await invoke("classify_library");
+      await refresh();
+    } catch (e) {
+      error.value = String(e);
+    } finally {
+      busy.value = false;
+    }
+  }
+
   async function refresh() {
     stats.value = await invoke<LibraryStats>("library_stats");
     // 本计划先一次性取前 5000 条；分页 + 虚拟滚动的联动属后续计划。
@@ -97,6 +111,7 @@ export const useLibrary = defineStore("library", () => {
     openLibrary,
     rescan,
     generateThumbs,
+    classify,
     refresh,
   };
 });

@@ -82,6 +82,7 @@ impl Thumbs for FfmpegThumbs {
 #[tauri::command]
 pub async fn import_from_device(
     app: tauri::AppHandle,
+    assume_cloud: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<ImportProgress, String> {
     let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
@@ -144,6 +145,7 @@ pub async fn import_from_device(
             &mut transfer,
             &mut thumbs,
             ffprobe_bin.as_deref(),
+            assume_cloud,
             &should_cancel,
             |p| {
                 if std::env::var_os("LIVEPORTER_IMPORT_LOG").is_some() {
@@ -202,6 +204,80 @@ pub async fn generate_thumbs(
 #[tauri::command]
 pub fn cancel_import(state: tauri::State<'_, AppState>) {
     state.request_cancel();
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ClassifySummary {
+    pub total: usize,
+    pub changed: usize,
+}
+
+/// 重新读取所有条目的 ContentIdentifier 并重算 integrity（回填已有库）。
+#[tauri::command]
+pub async fn classify_library(
+    state: tauri::State<'_, AppState>,
+) -> Result<ClassifySummary, String> {
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+    state.reset_cancel();
+    let cancel = state.cancel_flag();
+
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<ClassifySummary> {
+        let lib = Library::open(&root)?;
+        let conn = crate::db::open(&lib.db_path())?;
+        let probe = crate::ffmpeg::find_ffprobe().ok();
+
+        let jobs = crate::db::assets_for_classify(&conn)?;
+        let total = jobs.len();
+        let mut changed = 0usize;
+
+        for job in &jobs {
+            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            let still_id = job.still_path.as_ref().and_then(|p| {
+                std::fs::read(p)
+                    .ok()
+                    .and_then(|b| crate::livephoto::content_id_from_still(&b))
+            });
+            let movie_id = match (&job.movie_path, &probe) {
+                (Some(p), Some(pr)) => crate::ffmpeg::run_capture(
+                    pr,
+                    &crate::ffmpeg::movie_content_id_args(std::path::Path::new(p)),
+                )
+                .ok()
+                .and_then(|s| crate::livephoto::clean_id(s.trim().as_bytes())),
+                _ => None,
+            };
+            let integrity = crate::livephoto::classify(
+                job.still_path.is_some(),
+                job.movie_path.is_some(),
+                still_id.as_deref(),
+                movie_id.as_deref(),
+                job.still_size.unwrap_or(0).max(0) as u64,
+                false,
+            );
+            crate::db::set_content_id(
+                &conn,
+                job.device_id,
+                &job.base_name,
+                job.taken_at,
+                still_id.as_deref().or(movie_id.as_deref()),
+            )?;
+            crate::db::set_integrity(
+                &conn,
+                job.device_id,
+                &job.base_name,
+                job.taken_at,
+                integrity,
+            )?;
+            changed += 1;
+        }
+
+        Ok(ClassifySummary { total, changed })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
 }
 
 /// 确保某条目的预览片存在；返回其绝对路径（前端用 `lpm://` 加载）。

@@ -18,7 +18,7 @@ export const useImport = defineStore("import", () => {
   const progress = ref<ImportProgress | null>(null);
   const error = ref<string | null>(null);
 
-  async function start() {
+  async function start(assumeCloud = false) {
     running.value = true;
     error.value = null;
     // 先订阅进度事件，再发起命令。
@@ -26,7 +26,9 @@ export const useImport = defineStore("import", () => {
       progress.value = e.payload;
     });
     try {
-      progress.value = await invoke<ImportProgress>("import_from_device");
+      progress.value = await invoke<ImportProgress>("import_from_device", {
+        assumeCloud,
+      });
     } catch (e) {
       error.value = String(e);
     } finally {

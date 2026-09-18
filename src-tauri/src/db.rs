@@ -317,6 +317,35 @@ pub fn assets_missing_thumbs(conn: &Connection) -> rusqlite::Result<Vec<ThumbJob
     rows.collect()
 }
 
+/// 列出所有需要重算 integrity 的条目（文件未标记缺失）。
+#[derive(Debug, Clone)]
+pub struct ClassifyJob {
+    pub device_id: i64,
+    pub base_name: String,
+    pub taken_at: i64,
+    pub still_path: Option<String>,
+    pub movie_path: Option<String>,
+    pub still_size: Option<i64>,
+}
+
+pub fn assets_for_classify(conn: &Connection) -> rusqlite::Result<Vec<ClassifyJob>> {
+    let mut stmt = conn.prepare(
+        "SELECT device_id, base_name, taken_at, still_path, movie_path, still_size
+         FROM asset WHERE missing = 0",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(ClassifyJob {
+            device_id: r.get(0)?,
+            base_name: r.get(1)?,
+            taken_at: r.get(2)?,
+            still_path: r.get(3)?,
+            movie_path: r.get(4)?,
+            still_size: r.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AssetRow {
     pub id: i64,
@@ -358,9 +387,22 @@ pub struct LibraryStats {
     pub photo: i64,
     pub video: i64,
     pub missing: i64,
+    /// (integrity 值, 数量)，按值升序。用于展示异常项分布。
+    pub by_integrity: Vec<(i64, i64)>,
 }
 
 pub fn stats(conn: &Connection) -> rusqlite::Result<LibraryStats> {
+    let mut by_integrity: Vec<(i64, i64)> = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT integrity, count(*) FROM asset GROUP BY integrity ORDER BY integrity",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        for row in rows {
+            by_integrity.push(row?);
+        }
+    }
+
     conn.query_row(
         "SELECT
            count(*),
@@ -377,6 +419,7 @@ pub fn stats(conn: &Connection) -> rusqlite::Result<LibraryStats> {
                 photo: r.get(2)?,
                 video: r.get(3)?,
                 missing: r.get(4)?,
+                by_integrity,
             })
         },
     )

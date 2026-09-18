@@ -101,13 +101,16 @@ pub fn clean_id(raw: &[u8]) -> Option<String> {
 
 /// 判定一个条目的 integrity（设计 §10.1）。
 ///
-/// `still_size` 仅在「缺标识」时用于体积合理性兜底。
+/// `cloud_hint`：用户勾选了「本次的原件可能不在手机上」时为真——只有此时才做
+/// 「体积明显偏小 → 疑似非原件」的判定（设计 §6.4 v1）。
+/// `still_size` 仅在「无标识」时用于体积合理性兜底。
 pub fn classify(
     has_still: bool,
     has_movie: bool,
     still_id: Option<&str>,
     movie_id: Option<&str>,
     still_size: u64,
+    cloud_hint: bool,
 ) -> i64 {
     let base = match (has_still, has_movie) {
         (true, true) => match (still_id, movie_id) {
@@ -127,8 +130,9 @@ pub fn classify(
         (false, false) => INTEGRITY_PARTIAL,
     };
 
-    // 疑似 iCloud 占位副本：仅静态、无标识、体积明显偏小 → 优先级最高。
-    if has_still && !has_movie && still_id.is_none() && still_size < SUSPECT_STILL_MAX {
+    // 疑似 iCloud 占位副本：仅静态、无标识、体积明显偏小、且用户提示过 → 优先级最高。
+    if cloud_hint && has_still && !has_movie && still_id.is_none() && still_size < SUSPECT_STILL_MAX
+    {
         INTEGRITY_SUSPECT
     } else {
         base
@@ -195,26 +199,34 @@ mod tests {
     #[test]
     fn classify_rules() {
         assert_eq!(
-            classify(true, true, Some("X"), Some("X"), 1_000_000),
+            classify(true, true, Some("X"), Some("X"), 1_000_000, false),
             INTEGRITY_OK
         );
         assert_eq!(
-            classify(true, true, Some("X"), Some("Y"), 1_000_000),
+            classify(true, true, Some("X"), Some("Y"), 1_000_000, false),
             INTEGRITY_MISMATCH
         );
         assert_eq!(
-            classify(true, false, Some("X"), None, 1_000_000),
+            classify(true, false, Some("X"), None, 1_000_000, false),
             INTEGRITY_PARTIAL
         );
         assert_eq!(
-            classify(true, false, None, None, 1_000_000),
+            classify(true, false, None, None, 1_000_000, false),
             INTEGRITY_STILL_ONLY
         );
         assert_eq!(
-            classify(false, true, None, Some("Y"), 0),
+            classify(false, true, None, Some("Y"), 0, false),
             INTEGRITY_VIDEO_ONLY
         );
-        // 无标识 + 体积明显偏小 → 疑似非原件
-        assert_eq!(classify(true, false, None, None, 1000), INTEGRITY_SUSPECT);
+        // 无标识 + 体积明显偏小，但**未**勾选 cloud_hint → 不判 5
+        assert_eq!(
+            classify(true, false, None, None, 1000, false),
+            INTEGRITY_STILL_ONLY
+        );
+        // 勾选 cloud_hint + 体积偏小 → 疑似非原件
+        assert_eq!(
+            classify(true, false, None, None, 1000, true),
+            INTEGRITY_SUSPECT
+        );
     }
 }
