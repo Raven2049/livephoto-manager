@@ -233,6 +233,7 @@ pub fn run_tasks(
     conn: &Connection,
     transfer: &mut dyn Transfer,
     thumbs: &mut dyn Thumbs,
+    ffprobe_bin: Option<&Path>,
     should_cancel: &dyn Fn() -> bool,
     mut on_progress: impl FnMut(&ImportProgress),
 ) -> anyhow::Result<ImportProgress> {
@@ -379,6 +380,43 @@ pub fn run_tasks(
                     task.taken_at,
                     STATUS_COPIED,
                     None,
+                )?;
+
+                // 读两侧 ContentIdentifier 并判定 integrity（设计 §10.1）。
+                let still_id = asset.still.as_ref().and_then(|f| {
+                    std::fs::read(&f.path)
+                        .ok()
+                        .and_then(|b| crate::livephoto::content_id_from_still(&b))
+                });
+                let movie_id = match (&asset.movie, ffprobe_bin) {
+                    (Some(f), Some(probe)) => crate::ffmpeg::run_capture(
+                        probe,
+                        &crate::ffmpeg::movie_content_id_args(Path::new(&f.path)),
+                    )
+                    .ok()
+                    .and_then(|s| crate::livephoto::clean_id(s.trim().as_bytes())),
+                    _ => None,
+                };
+                let integrity = crate::livephoto::classify(
+                    asset.still.is_some(),
+                    asset.movie.is_some(),
+                    still_id.as_deref(),
+                    movie_id.as_deref(),
+                    asset.still.as_ref().map(|f| f.size).unwrap_or(0),
+                );
+                crate::db::set_content_id(
+                    conn,
+                    device_id,
+                    &task.base_name,
+                    task.taken_at,
+                    still_id.as_deref().or(movie_id.as_deref()),
+                )?;
+                crate::db::set_integrity(
+                    conn,
+                    device_id,
+                    &task.base_name,
+                    task.taken_at,
+                    integrity,
                 )?;
 
                 // 缩略图：失败不把条目判为失败（文件已完好），只保留 copied 并记录原因。
@@ -566,6 +604,7 @@ mod tests {
             &conn,
             &mut fake,
             &mut thumbs,
+            None,
             &|| false,
             |_| {},
         )
@@ -634,6 +673,7 @@ mod tests {
             &conn,
             &mut fake,
             &mut thumbs,
+            None,
             &|| false,
             |_| {},
         )

@@ -210,6 +210,38 @@ pub fn set_thumb_path(
     Ok(())
 }
 
+/// 写入 ContentIdentifier（静态图优先，其次视频）。
+pub fn set_content_id(
+    conn: &Connection,
+    device_id: i64,
+    base_name: &str,
+    taken_at: i64,
+    content_id: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE asset SET content_id=?1, updated_at=?2
+         WHERE device_id=?3 AND base_name=?4 AND taken_at=?5",
+        params![content_id, now_epoch(), device_id, base_name, taken_at],
+    )?;
+    Ok(())
+}
+
+/// 写入完整性分类。
+pub fn set_integrity(
+    conn: &Connection,
+    device_id: i64,
+    base_name: &str,
+    taken_at: i64,
+    integrity: i64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE asset SET integrity=?1, updated_at=?2
+         WHERE device_id=?3 AND base_name=?4 AND taken_at=?5",
+        params![integrity, now_epoch(), device_id, base_name, taken_at],
+    )?;
+    Ok(())
+}
+
 /// 取一个条目的视频源路径（用于生成预览片）。不存在返回 None。
 pub fn asset_movie_path(conn: &Connection, asset_id: i64) -> rusqlite::Result<Option<String>> {
     conn.query_row(

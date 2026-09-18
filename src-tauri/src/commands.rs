@@ -131,6 +131,7 @@ pub async fn import_from_device(
             bin: crate::ffmpeg::find_ffmpeg()?,
         };
         let should_cancel = || cancel.load(std::sync::atomic::Ordering::SeqCst);
+        let ffprobe_bin = crate::ffmpeg::find_ffprobe().ok();
         let emit_target = app.clone();
         let started = std::time::Instant::now();
         let progress = importer::run_tasks(
@@ -142,6 +143,7 @@ pub async fn import_from_device(
             &conn,
             &mut transfer,
             &mut thumbs,
+            ffprobe_bin.as_deref(),
             &should_cancel,
             |p| {
                 if std::env::var_os("LIVEPORTER_IMPORT_LOG").is_some() {
