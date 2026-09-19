@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useLibrary } from "../stores/library";
 import AppIcon from "./AppIcon.vue";
 
@@ -43,9 +44,30 @@ function toggleIntegrity(v: number) {
   void lib.reload();
 }
 
-function clearAll() {
-  lib.clearFilters();
+/* ---------- 「筛选」气泡：日期区间 + 完整性（收进此处以保持工具栏简洁） ---------- */
+const open = ref(false);
+const root = ref<HTMLElement | null>(null);
+
+function onDocClick(e: MouseEvent) {
+  if (open.value && root.value && !root.value.contains(e.target as Node)) open.value = false;
 }
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") open.value = false;
+}
+onMounted(() => {
+  document.addEventListener("click", onDocClick);
+  document.addEventListener("keydown", onKeydown);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("click", onDocClick);
+  document.removeEventListener("keydown", onKeydown);
+});
+
+/** 非默认的附加筛选数量（用于按钮角标）。 */
+const activeCount = computed(
+  () =>
+    lib.filter.integrity.length + (lib.filter.from ? 1 : 0) + (lib.filter.to ? 1 : 0),
+);
 </script>
 
 <template>
@@ -70,31 +92,101 @@ function clearAll() {
     </button>
   </div>
 
-  <input
-    class="field"
-    type="date"
-    v-model="lib.filter.from"
-    @change="lib.reload"
-  />
-  <span class="muted" style="font-size: 12px">至</span>
-  <input class="field" type="date" v-model="lib.filter.to" @change="lib.reload" />
+  <div ref="root" class="filter-wrap">
+    <button
+      class="btn filter-btn"
+      :class="{ active: activeCount > 0 }"
+      :aria-expanded="open"
+      @click.stop="open = !open"
+    >
+      <AppIcon name="filter" :size="15" />筛选
+      <span v-if="activeCount" class="badge">{{ activeCount }}</span>
+    </button>
 
-  <button
-    v-for="i in integrities"
-    :key="i.value"
-    class="chip"
-    :class="{ active: lib.filter.integrity.includes(i.value) }"
-    @click="toggleIntegrity(i.value)"
-  >
-    {{ i.label }}
-  </button>
+    <div v-if="open" class="popover" @click.stop>
+      <div class="pop-title">拍摄日期</div>
+      <div class="pop-dates">
+        <input class="field" type="date" v-model="lib.filter.from" @change="lib.reload" />
+        <span class="muted" style="font-size: 12px">至</span>
+        <input class="field" type="date" v-model="lib.filter.to" @change="lib.reload" />
+      </div>
 
-  <select class="field" v-model="lib.granOverride" title="时间线分段粒度">
-    <option value="auto">分段：自动</option>
-    <option value="year">年</option>
-    <option value="month">月</option>
-    <option value="day">天</option>
-  </select>
+      <div class="pop-title">完整性</div>
+      <div class="pop-chips">
+        <button
+          v-for="i in integrities"
+          :key="i.value"
+          class="chip"
+          :class="{ active: lib.filter.integrity.includes(i.value) }"
+          @click="toggleIntegrity(i.value)"
+        >
+          {{ i.label }}
+        </button>
+      </div>
 
-  <button class="btn plain" title="清空筛选" @click="clearAll">清空</button>
+      <button class="btn block" style="margin-top: 10px" @click="lib.clearFilters">
+        清空筛选
+      </button>
+    </div>
+  </div>
 </template>
+
+<style scoped>
+.filter-wrap {
+  position: relative;
+}
+.filter-btn {
+  min-height: 36px;
+  gap: 6px;
+}
+.filter-btn.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+.badge {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  line-height: 17px;
+  text-align: center;
+}
+.popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 300px;
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--separator);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.pop-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--label-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 4px 2px 8px;
+}
+.pop-dates {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.pop-dates .field {
+  flex: 1;
+  min-width: 0;
+}
+.pop-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+</style>

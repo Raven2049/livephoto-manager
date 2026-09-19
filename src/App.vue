@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useLibrary, type AssetRow } from "./stores/library";
@@ -244,6 +244,46 @@ function preventDrag(e: DragEvent) {
 
 /* ---------- 侧栏「更多」菜单 ---------- */
 const menuOpen = ref(false);
+const menuEl = ref<HTMLElement | null>(null);
+
+function menuItems(): HTMLButtonElement[] {
+  return Array.from(
+    menuEl.value?.querySelectorAll<HTMLButtonElement>(".menu-item:not(:disabled)") ?? [],
+  );
+}
+/** 打开菜单时聚焦第一项；方向键在项间移动，Esc 关闭（menus.md / focus-and-selection.md）。 */
+watch(menuOpen, async (open) => {
+  if (!open) return;
+  await nextTick();
+  menuItems()[0]?.focus();
+});
+function onMenuKeydown(e: KeyboardEvent) {
+  const items = menuItems();
+  if (!items.length) return;
+  const cur = items.indexOf(document.activeElement as HTMLButtonElement);
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    items[(cur + 1) % items.length]?.focus();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    items[(cur - 1 + items.length) % items.length]?.focus();
+  } else if (e.key === "Home") {
+    e.preventDefault();
+    items[0]?.focus();
+  } else if (e.key === "End") {
+    e.preventDefault();
+    items[items.length - 1]?.focus();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    menuOpen.value = false;
+  }
+}
+const granOptions: { label: string; value: "auto" | "year" | "month" | "day" }[] = [
+  { label: "自动", value: "auto" },
+  { label: "年", value: "year" },
+  { label: "月", value: "month" },
+  { label: "天", value: "day" },
+];
 function runMenu(fn: () => unknown) {
   menuOpen.value = false;
   void fn();
@@ -469,7 +509,15 @@ const filtersActive = computed(
         >
           ⋯
         </button>
-        <div v-if="menuOpen" class="menu" @click.stop>
+        <div
+          v-if="menuOpen"
+          ref="menuEl"
+          class="menu"
+          role="menu"
+          tabindex="-1"
+          @click.stop
+          @keydown="onMenuKeydown"
+        >
           <button class="menu-item" :disabled="!lib.root || lib.busy" @click="runMenu(doRescan)">
             重建索引
           </button>
@@ -482,6 +530,17 @@ const filtersActive = computed(
           <div class="menu-sep"></div>
           <button class="menu-item" :disabled="!lib.root" @click="runMenu(exportDiag)">
             导出诊断报告…
+          </button>
+          <div class="menu-sep"></div>
+          <div class="menu-label">时间线分段</div>
+          <button
+            v-for="g in granOptions"
+            :key="g.value"
+            class="menu-item"
+            @click="lib.granOverride = g.value; menuOpen = false"
+          >
+            <span class="menu-check">{{ lib.granOverride === g.value ? "✓" : "" }}</span>
+            {{ g.label }}
           </button>
         </div>
       </div>
@@ -553,10 +612,6 @@ const filtersActive = computed(
       <div class="toolbar">
         <span class="title">资料库</span>
         <FilterBar />
-        <div class="status">
-          已加载 {{ lib.assets.length.toLocaleString() }}/{{ lib.total.toLocaleString() }} ·
-          {{ masonry ? "单列" : zoom.columns.value + " 列" }}
-        </div>
       </div>
 
       <div class="stage" ref="main" @wheel="onWheel">
@@ -581,6 +636,13 @@ const filtersActive = computed(
           @context-menu="onContextMenu"
           @request-delete="deleteSelected"
         />
+
+        <!-- 状态 HUD：移出工具栏，数字变化不再推动其它控件（HIG：控件位置保持稳定） -->
+        <div class="hud">
+          <span>{{ lib.total.toLocaleString() }} 项</span>
+          <span class="hud-sep">·</span>
+          <span>{{ masonry ? "单列" : zoom.columns.value + " 列" }}</span>
+        </div>
 
         <!-- 筛选无结果 / 空库 -->
         <div v-if="noResults" class="empty">
@@ -783,6 +845,18 @@ const filtersActive = computed(
   height: 1px;
   background: var(--separator);
   margin: 6px 4px;
+}
+.menu-label {
+  font-size: 11px;
+  color: var(--label-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 4px 10px 2px;
+}
+.menu-check {
+  display: inline-block;
+  width: 14px;
+  color: var(--accent);
 }
 
 /* 瓦片右键菜单 */
@@ -1106,10 +1180,26 @@ const filtersActive = computed(
   font-weight: 650;
   margin-right: 2px;
 }
-.status {
-  margin-left: auto;
+/* 状态 HUD：右下角浮层，不参与工具栏布局，数字变化不影响其它控件 */
+.hud {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  z-index: 4;
+  pointer-events: none;
+  display: flex;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--material);
+  backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid var(--separator);
   color: var(--label-2);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.hud-sep {
+  color: var(--label-3);
 }
 .stage {
   position: relative;

@@ -23,6 +23,7 @@ const PATHS: Record<string, string> = {
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
   warn: '<path d="M12 3 2 21h20z"/><path d="M12 10v5"/><path d="M12 18h.01"/>',
   play: '<path d="M7 4v16l13-8z"/>',
+  filter: '<path d="M3 5h18"/><path d="M6 12h12"/><path d="M10 19h4"/>',
 };
 </script>
 

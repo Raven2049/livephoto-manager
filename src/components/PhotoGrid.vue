@@ -621,6 +621,7 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
             :style="{
               width: cell.w + 'px',
               height: cell.h + 'px',
+              '--ts': cell.w + 'px',
               transform: `translate(${cell.x}px, ${cell.y}px)`,
             }"
             @mouseenter="onTileEnter(cell, $event)"
@@ -711,8 +712,9 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
   cursor: pointer;
   transition: box-shadow 0.16s;
 }
+/* 悬停用内描边而非外阴影：2px 间隔下阴影会盖到相邻图（HIG：避免频繁交互的动效） */
 .tile:hover {
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--label) 55%, transparent);
   z-index: 2;
 }
 .tile img {
@@ -733,15 +735,17 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
 }
 .check {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 24px;
-  height: 24px;
+  /* 徽标随瓦片尺寸缩放：小瓦片（14 列）不会显得过大 */
+  --cs: clamp(13px, calc(var(--ts, 96px) * 0.24), 24px);
+  top: calc(var(--cs) * 0.25);
+  right: calc(var(--cs) * 0.25);
+  width: var(--cs);
+  height: var(--cs);
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
-  font-size: 14px;
-  line-height: 24px;
+  font-size: calc(var(--cs) * 0.62);
+  line-height: var(--cs);
   text-align: center;
   border: 2px solid #fff;
   box-sizing: border-box;
