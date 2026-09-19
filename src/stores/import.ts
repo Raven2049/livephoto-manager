@@ -10,6 +10,8 @@ export interface ImportProgress {
   current: string;
   bytes_done: number;
   bytes_total: number;
+  /** 设备上枚举到的媒体数（用于区分「无新条目」与「设备上没东西」）。 */
+  scanned: number;
   cancelled: boolean;
 }
 

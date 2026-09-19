@@ -322,7 +322,7 @@ pub async fn import_from_device(
         let ffprobe_bin = crate::ffmpeg::find_ffprobe().ok();
         let emit_target = app.clone();
         let started = std::time::Instant::now();
-        let progress = importer::run_tasks(
+        let mut progress = importer::run_tasks(
             &tasks,
             lib.root(),
             &lib.thumbs_dir(),
@@ -353,6 +353,8 @@ pub async fn import_from_device(
             },
         )?;
 
+        // 设备上枚举到的媒体数（不含被去重跳过的），供前端区分空结果原因。
+        progress.scanned = device_files.len();
         Ok(progress)
     })
     .await

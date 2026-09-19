@@ -266,6 +266,8 @@ pub struct ImportProgress {
     pub current: String,
     pub bytes_done: u64,
     pub bytes_total: u64,
+    /// 设备上枚举到的媒体文件数（用于区分「无新条目」与「设备上没东西」）。
+    pub scanned: usize,
     pub cancelled: bool,
 }
 

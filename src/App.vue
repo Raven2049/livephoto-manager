@@ -97,6 +97,16 @@ async function importFromDevice() {
   if (!p) return;
   if (p.cancelled) {
     toast(`已取消（${p.done}/${p.total}）`);
+  } else if (p.total === 0) {
+    // 区分「没新条目」与「设备上根本没枚举到媒体」（后者多为 iCloud 未下载 / 未信任）。
+    if (p.scanned === 0) {
+      toast(
+        "未发现可导入的媒体：可能是原件在 iCloud 未下载（请在手机设为「下载并保留原件」后拔插重连），或手机未解锁/未信任此电脑。",
+        "error",
+      );
+    } else {
+      toast("已是最新，无新条目。");
+    }
   } else {
     toast(
       `导入完成 ${p.done}/${p.total}${p.failed ? ` · 失败 ${p.failed}` : ""}`,
