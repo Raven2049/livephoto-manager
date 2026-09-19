@@ -901,6 +901,27 @@ pub async fn ensure_preview(
     .map_err(|e| format!("{e:#}"))
 }
 
+/// 在资源管理器中定位某个文件（用于「导出诊断报告」后的可见反馈）。
+/// 只允许定位当前库内的文件。
+#[tauri::command]
+pub fn reveal_in_explorer(path: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.is_file() {
+        return Err("文件不存在".to_string());
+    }
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+    let canon = std::fs::canonicalize(&p).map_err(|e| e.to_string())?;
+    let root = std::fs::canonicalize(&root).map_err(|e| e.to_string())?;
+    if !canon.starts_with(&root) {
+        return Err("路径不在库内".to_string());
+    }
+    std::process::Command::new("explorer")
+        .arg(format!("/select,{}", canon.display()))
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

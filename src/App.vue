@@ -112,10 +112,10 @@ async function doRescan() {
 }
 
 async function doThumbs() {
-  await lib.generateThumbs();
+  const r = await lib.generateThumbs();
   if (lib.error) toastError();
-  else if (lib.thumbs?.failed) {
-    toast(`缩略图失败 ${lib.thumbs.failed} 项`, "error");
+  else if (r?.failed) {
+    toast(`缩略图失败 ${r.failed} 项`, "error");
   }
 }
 
@@ -128,6 +128,8 @@ async function doClassify() {
 async function exportDiag() {
   try {
     const path = await lib.exportDiagnostics();
+    // 报告在隐藏的 .lpm 里，资源管理器里不易找到：定位到文件给出可见反馈。
+    await invoke("reveal_in_explorer", { path }).catch(() => {});
     toast(`诊断报告已生成：${path}`, "info", path);
   } catch (e) {
     toast(String(e), "error");
@@ -381,6 +383,26 @@ async function openRecent(path: string) {
 async function forgetRecent(path: string) {
   await lib.forgetRecent(path);
 }
+
+/* ---------- 切库过渡：新库就绪时淡入 ----------
+ * 只改主区容器的 opacity，不碰滚动；Reduce Motion 下由 app.css 的全局规则禁用动画。 */
+const switching = ref(false);
+let switchFallback: number | undefined;
+watch(
+  () => lib.root,
+  () => {
+    switching.value = true;
+    if (switchFallback !== undefined) clearTimeout(switchFallback);
+    // 兜底：库为空/长时间无内容时也要淡入，最多 400ms。
+    switchFallback = window.setTimeout(() => (switching.value = false), 400);
+  },
+);
+watch(
+  () => lib.loading,
+  (loading) => {
+    if (!loading && switching.value) switching.value = false;
+  },
+);
 
 onMounted(() => {
   document.addEventListener("dragstart", preventDrag);
@@ -710,7 +732,7 @@ const filtersActive = computed(
         <FilterBar />
       </div>
 
-      <div class="stage" ref="main" @wheel="onWheel">
+      <div class="stage" :class="{ switching }" ref="main" @wheel="onWheel">
         <PhotoGrid
           ref="grid"
           :groups="groups"
@@ -1371,6 +1393,11 @@ const filtersActive = computed(
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  /* 切库时的淡入过渡（仅 opacity；Reduce Motion 下由全局规则禁用） */
+  transition: opacity 160ms ease;
+}
+.stage.switching {
+  opacity: 0;
 }
 
 /* 空状态 */

@@ -135,6 +135,10 @@ export const useLibrary = defineStore("library", () => {
     try {
       await invoke("open_library", { path });
       root.value = path;
+      // 立即清空上一库的网格，避免切换时闪出旧瓦片（loading.md：先进入加载态）。
+      assets.value = [];
+      total.value = 0;
+      setSelected(new Set());
       await refresh();
       // 自动维护：索引为空但有文件 → 重建索引；有缺缩略图 → 自动补。
       if ((stats.value?.total ?? 0) === 0) await rescan();
@@ -197,7 +201,7 @@ export const useLibrary = defineStore("library", () => {
 
   const thumbs = ref<{ total: number; done: number; failed: number } | null>(null);
 
-  async function generateThumbs() {
+  async function generateThumbs(): Promise<{ total: number; done: number; failed: number } | null> {
     busy.value = true;
     error.value = null;
     thumbs.value = null;
@@ -209,12 +213,16 @@ export const useLibrary = defineStore("library", () => {
       },
     );
     try {
-      thumbs.value = await invoke("generate_thumbs");
+      const r = await invoke<{ total: number; done: number; failed: number }>("generate_thumbs");
       await refresh();
+      return r;
     } catch (e) {
       error.value = String(e);
+      return null;
     } finally {
       un();
+      // 进度是瞬时的：跑完即清除，避免侧栏一直挂着（progress-indicators.md:26）。
+      thumbs.value = null;
       busy.value = false;
     }
   }

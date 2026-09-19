@@ -336,6 +336,20 @@ pub fn set_asset_status(
     Ok(())
 }
 
+/// 仅更新错误信息（不改状态）。用于缩略图回填失败记录，供诊断报告列出。
+pub fn set_asset_error(
+    conn: &Connection,
+    dir: &str,
+    base_name: &str,
+    error: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE asset SET error=?1, updated_at=?2 WHERE dir=?3 AND base_name=?4",
+        params![error, now_epoch(), dir, base_name],
+    )?;
+    Ok(())
+}
+
 /// 写入缩略图路径。
 pub fn set_thumb_path(
     conn: &Connection,

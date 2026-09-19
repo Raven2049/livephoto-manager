@@ -240,6 +240,13 @@ where
                 Err(e) => {
                     summary.failed += 1;
                     eprintln!("缩略图失败 {}: {e:#}", job.base_name);
+                    // 记录原因，供诊断报告列出（不改状态）。
+                    let _ = crate::db::set_asset_error(
+                        conn,
+                        &job.dir,
+                        &job.base_name,
+                        Some(&format!("缩略图失败: {e:#}")),
+                    );
                 }
             }
             on_progress(&summary);

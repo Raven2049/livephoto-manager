@@ -14,6 +14,7 @@ mod protocol;
 mod state;
 mod thumb;
 mod time;
+mod window;
 
 use tauri::Manager;
 
@@ -22,6 +23,20 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState::default())
+        .setup(|app| {
+            // 恢复上次的窗口位置/大小/最大化（launching.md:26）。窗口先隐藏，恢复后再显示，
+            // 避免「先按配置显示、再跳到保存几何」的闪一下。
+            if let Some(win) = app.get_webview_window("main") {
+                window::restore(&win);
+                let _ = win.show();
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                window::on_event(window, event);
+            }
+        })
         .register_asynchronous_uri_scheme_protocol("lpm", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             // 协议处理函数是同步的：把读盘放到受控的阻塞线程池，读完再 respond。
@@ -76,6 +91,7 @@ pub fn run() {
             commands::ensure_view_video,
             commands::classify_library,
             commands::export_diagnostics,
+            commands::reveal_in_explorer,
             commands::export_assets,
             commands::delete_assets,
         ])
