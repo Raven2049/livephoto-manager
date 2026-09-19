@@ -23,9 +23,8 @@
   --danger: #ff3b30; /* systemRed light */
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
 
-  /* 同心圆角：内圆角 + 内边距 = 外圆角 */
+  /* 同心圆角：内圆角 + 内边距 = 外圆角（网格瓦片为方角，不用圆角变量） */
   --r-card: 16px;
-  --r-tile: 12px;
   --r-ctl: 10px;
   --r-pill: 999px;
 }
@@ -320,33 +319,6 @@ img {
   border-radius: 2px;
   background: var(--accent);
   transition: width 0.2s linear;
-}
-
-/* ---------- 侧栏条目 ---------- */
-.action {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  min-height: 40px;
-  padding: 0 10px;
-  border-radius: var(--r-ctl);
-  font-size: 14px;
-  color: var(--label);
-  cursor: pointer;
-  width: 100%;
-  background: transparent;
-  border: 0;
-  text-align: left;
-}
-.action:hover {
-  background: var(--fill);
-}
-.action:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.action svg {
-  color: var(--label-2);
 }
 
 /* ---------- 卡片 ---------- */

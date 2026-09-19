@@ -759,8 +759,7 @@ const filtersActive = computed(
   gap: 11px;
   padding: 18px 16px 12px;
 }
-.logo,
-.empty-logo {
+.logo {
   width: 32px;
   height: 32px;
   border-radius: 9px;
@@ -1225,9 +1224,6 @@ const filtersActive = computed(
   border: 1px solid var(--separator);
   border-radius: var(--r-card);
   box-shadow: var(--shadow);
-}
-.empty-card .empty-logo {
-  margin: 0 auto 12px;
 }
 .empty-card h2 {
   font-size: 17px;

@@ -411,10 +411,10 @@ function maybeLoadMore() {
 }
 
 /* ---------- 滚轮滚动 ----------
- * 只用浏览器原生的平滑滚动（CSS `scroll-behavior: smooth`），不再自建动画状态机
- * （曾经因「原生滚动 / 自定义动画 / focus 滚动」三方互相写 scrollTop 反复出 bug）。
- * 这里仅按缩放档位把滚轮 delta 放大，让单列大图也能滚得动。
- * 原生动画可被新的滚动输入自然打断，无需处理竞态。 */
+ * 不自建动画状态机（曾因「原生滚动 / 自定义动画 / focus 滚动」三方写 scrollTop 反复出 bug），
+ * 也不给容器加 `scroll-behavior: smooth`（那会让每次 `scrollTop =` 都触发动画，
+ * 与逐帧赋值叠加 → 又顿又慢）。这里只把滚轮 delta 按缩放档位放大后**即时**赋值。
+ * 触控板事件密集，即时赋值本身已足够顺滑；鼠标滚轮是离散步进。 */
 
 /** 每格滚轮的基础位移倍率：单列最大，格子越密越小。 */
 function wheelStep(): number {
@@ -443,7 +443,9 @@ function onWheel(e: WheelEvent) {
     0,
     Math.min(max, el.scrollTop + normalizeDelta(e) * wheelStep()),
   );
-  el.scrollTo({ top: dest, behavior: "smooth" });
+  // 即时位移：不要每次滚轮都重启平滑动画（那会让动画永远被打断 → 又顿又慢）。
+  // 触控板本身事件密集，即时位移已经足够顺滑；鼠标滚轮是离散步进。
+  el.scrollTop = dest;
 }
 
 let ticking = false;
@@ -663,8 +665,6 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--bg);
-  /* 原生平滑滚动：滚轮/换挡锚点都交给浏览器，避免自建动画的竞态 */
-  scroll-behavior: smooth;
 }
 /* 焦点会立即转入瓦片，容器本身不画焦点环 */
 
