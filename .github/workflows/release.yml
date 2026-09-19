@@ -1,0 +1,46 @@
+name: Release
+
+# 打 tag（v*）后自动在云端构建绿色版 zip 并发到 GitHub Releases。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-portable:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend deps
+        run: npm ci
+
+      # 裁剪版 ffmpeg 随仓库提交在 vendor/ffmpeg（哈希见 scripts/ffmpeg.sha256）。
+      - name: Build portable zip
+        shell: pwsh
+        run: ./scripts/package-portable.ps1 -FfmpegDir vendor/ffmpeg
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $files = Get-ChildItem dist-portable -Filter "LivePorter-*.zip*" | ForEach-Object { $_.FullName }
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $files --clobber
+          } else {
+            gh release create $tag $files --title "LivePorter $tag" --generate-notes
+          }

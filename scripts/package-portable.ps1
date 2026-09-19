@@ -29,8 +29,11 @@ Set-Location -LiteralPath $root
 if (-not $FfmpegDir) {
     if ($env:LIVEPORTER_FFMPEG) {
         $FfmpegDir = Split-Path -Parent $env:LIVEPORTER_FFMPEG
+    } elseif (Test-Path -LiteralPath (Join-Path $root "vendor/ffmpeg/ffmpeg.exe")) {
+        # trimmed build committed in the repo (used by CI and by default locally)
+        $FfmpegDir = Join-Path $root "vendor/ffmpeg"
     } else {
-        Write-Error "Provide -FfmpegDir or set the LIVEPORTER_FFMPEG environment variable."
+        Write-Error "Provide -FfmpegDir, set LIVEPORTER_FFMPEG, or commit vendor/ffmpeg/ffmpeg.exe."
         exit 1
     }
 }

@@ -75,6 +75,16 @@ powershell -ExecutionPolicy Bypass -File scripts/package-portable.ps1
 
 ## 7. 发布到 GitHub Releases
 
+> **推荐：自动发布。** 打 tag 并 push 即触发 `.github/workflows/release.yml`，在 `windows-latest` 上
+> 构建绿色版 zip 并直接发到 Releases（无需本地环境）：
+> ```bash
+> git tag v1.0.0
+> git push origin v1.0.0
+> ```
+> 裁剪版 ffmpeg 随仓库提交在 `vendor/ffmpeg/`（哈希见 `scripts/ffmpeg.sha256`），CI 与本地打包都直接用它。
+>
+> 下面是**手动/离线**发布流程（备选）。
+
 ```bash
 git tag v1.0.0
 git push origin v1.0.0

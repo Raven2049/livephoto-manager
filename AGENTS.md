@@ -79,6 +79,11 @@
 - [x] **Task 7** `docs/releasing.md`
 - 实测记录：`docs/superpowers/notes/2026-09-18-packaging-smoke.md`
 
+**CI / 自动发布（2026-09-19）**：`.github/workflows/release.yml` 在打 tag（`v*`）后于 `windows-latest`
+构建绿色版 zip 并发到 GitHub Releases；`.github/workflows/ci.yml` 在 push/PR 时跑 `cargo test/clippy/fmt`
+与 `npm run build`。裁剪版 ffmpeg 现**随仓库提交**在 `vendor/ffmpeg/`（哈希见 `scripts/ffmpeg.sha256`）。
+（本机代理把 github 解析成假 IP、22 端口不通，SSH 已改走 `ssh.github.com:443`，见 `~/.ssh/config`。）
+
 - [x] **计划 10（阶段 9 界面改版）实现完成**：原生 Vue+CSS，左侧栏 + 主区、跟随系统深浅、
   toast/确认框/空状态/进度；按 `apple-hig` 经典 HIG，排除 iOS 26+ Liquid Glass（见「已定的关键约束」）。
   验证：`vue-tsc`、`npm run build`、`tauri dev` 用户确认「看着还不错」
