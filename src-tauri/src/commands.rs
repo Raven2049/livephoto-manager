@@ -639,11 +639,19 @@ pub async fn delete_assets(
 pub struct ClassifySummary {
     pub total: usize,
     pub changed: usize,
+    pub cancelled: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ClassifyProgress {
+    pub total: usize,
+    pub done: usize,
 }
 
 /// 重新读取所有条目的 ContentIdentifier 并重算 integrity（回填已有库）。
 #[tauri::command]
 pub async fn classify_library(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<ClassifySummary, String> {
     let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
@@ -658,9 +666,12 @@ pub async fn classify_library(
         let jobs = crate::db::assets_for_classify(&conn)?;
         let total = jobs.len();
         let mut changed = 0usize;
+        let mut cancelled = false;
+        let mut last_emit = 0usize;
 
         for job in &jobs {
             if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                cancelled = true;
                 break;
             }
             let still_id = job.still_path.as_ref().and_then(|p| {
@@ -700,9 +711,23 @@ pub async fn classify_library(
                 integrity,
             )?;
             changed += 1;
+            if changed - last_emit >= 20 {
+                last_emit = changed;
+                let _ = app.emit(
+                    "classify://progress",
+                    ClassifyProgress {
+                        total,
+                        done: changed,
+                    },
+                );
+            }
         }
 
-        Ok(ClassifySummary { total, changed })
+        Ok(ClassifySummary {
+            total,
+            changed,
+            cancelled,
+        })
     })
     .await
     .map_err(|e| e.to_string())?

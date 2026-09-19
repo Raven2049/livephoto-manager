@@ -99,21 +99,21 @@ async function importFromDevice() {
 async function doRescan() {
   await lib.rescan();
   if (lib.error) toastError();
-  else toast("索引已重建");
+  // 成功由侧栏进度条体现，不再弹 toast（feedback.md：预期成功不必确认）
 }
 
 async function doThumbs() {
   await lib.generateThumbs();
   if (lib.error) toastError();
-  else if (lib.thumbs) {
-    toast(`缩略图 ${lib.thumbs.done}/${lib.thumbs.total}（失败 ${lib.thumbs.failed}）`);
+  else if (lib.thumbs?.failed) {
+    toast(`缩略图失败 ${lib.thumbs.failed} 项`, "error");
   }
 }
 
 async function doClassify() {
-  await lib.classify();
+  const cancelled = await lib.classify();
   if (lib.error) toastError();
-  else toast("标识校验完成");
+  else if (cancelled) toast("已取消校验");
 }
 
 async function exportDiag() {
@@ -137,13 +137,16 @@ async function exportSelected() {
 async function deleteSelected() {
   const n = lib.selected.size;
   if (!n) return;
-  const ok = await askConfirm(
-    `将删除 ${n} 个条目并移入回收站（实况条目会同时删除静态图与视频）。\n回收站容量不足时，大文件可能被永久删除。`,
-  );
-  if (!ok) return;
+  // feedback.md：预期内的删除不必警告（Finder 移入废纸篓不弹确认）；仅批量时确认。
+  if (n >= 10) {
+    const ok = await askConfirm(
+      `将删除 ${n} 个条目并移入回收站（实况条目会同时删除静态图与视频）。\n回收站容量不足时，大文件可能被永久删除。`,
+    );
+    if (!ok) return;
+  }
   await lib.deleteSelected();
   if (lib.error) toastError();
-  else toast(`已删除 ${n} 个条目`);
+  // 成功不弹 toast：条目消失本身就是反馈
 }
 
 /* ---------- 网格与预览 ---------- */
@@ -297,7 +300,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", onKeydown);
 });
 
-/* ---------- 进度与统计 ---------- */
+/* ---------- 统一进度区（侧栏一处，progress-indicators.md：位置固定） ---------- */
 const importPct = computed(() => {
   const p = imp.progress;
   return p && p.total ? Math.round((p.done / p.total) * 100) : 0;
@@ -307,6 +310,72 @@ const thumbPct = computed(() => {
   const t = lib.thumbs;
   return t && t.total ? Math.round((t.done / t.total) * 100) : 0;
 });
+const classifyPct = computed(() => {
+  const c = lib.classifyProgress;
+  return c && c.total ? Math.round((c.done / c.total) * 100) : 0;
+});
+
+/** 当前正在进行的长任务（同一时刻只有一个），供侧栏进度区展示。 */
+type ActiveTask =
+  | { kind: "import"; pct: number; text: string; right: string; cancellable: true }
+  | { kind: "scan"; pct: number | null; text: string; right: string; cancellable: true }
+  | { kind: "thumbs"; pct: number; text: string; right: string; cancellable: false }
+  | { kind: "classify"; pct: number; text: string; right: string; cancellable: true }
+  | { kind: "busy"; pct: number | null; text: string; right: string; cancellable: false };
+
+const activeTask = computed<ActiveTask | null>(() => {
+  if (imp.running) {
+    const p = imp.progress;
+    return {
+      kind: "import",
+      pct: importPct.value,
+      text: `导入中 ${p?.done ?? 0}/${p?.total ?? "?"}`,
+      right: `${importMB.value} MB`,
+      cancellable: true,
+    };
+  }
+  if (lib.scanning) {
+    const s = lib.scanProgress;
+    return {
+      kind: "scan",
+      pct: null, // 扫描总量未知 → 不确定型
+      text: `重建索引… ${s?.files ?? 0} 个文件`,
+      right: `${s?.assets ?? 0} 条目`,
+      cancellable: true,
+    };
+  }
+  if (lib.classifyProgress) {
+    const c = lib.classifyProgress;
+    return {
+      kind: "classify",
+      pct: classifyPct.value,
+      text: `校验标识 ${c.done}/${c.total}`,
+      right: "",
+      cancellable: true,
+    };
+  }
+  if (lib.thumbs) {
+    return {
+      kind: "thumbs",
+      pct: thumbPct.value,
+      text: `缩略图 ${lib.thumbs.done}/${lib.thumbs.total}`,
+      right: lib.thumbs.failed ? `失败 ${lib.thumbs.failed}` : "",
+      cancellable: false,
+    };
+  }
+  if (lib.busy) {
+    return { kind: "busy", pct: null, text: "处理中…", right: "", cancellable: false };
+  }
+  return null;
+});
+
+function cancelActive() {
+  const t = activeTask.value;
+  if (!t) return;
+  if (t.kind === "import") imp.stop();
+  else if (t.kind === "scan") lib.cancelScan();
+  else if (t.kind === "classify") lib.cancelScan();
+}
 
 const stats = computed(() => lib.stats);
 const abnormal = computed(() => {
@@ -452,36 +521,30 @@ const filtersActive = computed(
           :disabled="!lib.root || imp.running"
           @click="importFromDevice"
         >
-          <AppIcon name="iphone" />从 iPhone 导入
+          <span v-if="imp.running" class="spinner-sm" aria-hidden="true"></span>
+          <AppIcon v-else name="iphone" />{{ imp.running ? "导入中…" : "从 iPhone 导入" }}
         </button>
         <label class="switch" :class="{ on: assumeCloud }" @click.prevent="assumeCloud = !assumeCloud">
           <span class="track"><i></i></span>原件可能不在手机
         </label>
-
-        <template v-if="imp.running">
-          <div class="progress"><i :style="{ width: importPct + '%' }"></i></div>
-          <div class="ptext">
-            <span>导入中 {{ imp.progress?.done ?? 0 }}/{{ imp.progress?.total ?? "?" }}</span>
-            <span>{{ importMB }} MB</span>
-          </div>
-          <button class="btn block" style="margin-top: 8px" @click="imp.stop">
-            <AppIcon name="stop" />停止
-          </button>
-        </template>
-        <template v-else-if="lib.busy">
-          <div class="progress"><i style="width: 40%"></i></div>
-          <div class="ptext"><span>处理中…</span></div>
-        </template>
-        <template v-else-if="lib.thumbs">
-          <div class="progress"><i :style="{ width: thumbPct + '%' }"></i></div>
-          <div class="ptext">
-            <span>缩略图 {{ lib.thumbs.done }}/{{ lib.thumbs.total }}</span>
-            <span>失败 {{ lib.thumbs.failed }}</span>
-          </div>
-        </template>
       </div>
 
       <div class="spacer"></div>
+
+      <!-- 统一进度区（所有长任务都在这里显示） -->
+      <div v-if="activeTask" class="taskbar">
+        <div class="progress">
+          <i v-if="activeTask.pct !== null" :style="{ width: activeTask.pct + '%' }"></i>
+          <i v-else class="indeterminate"></i>
+        </div>
+        <div class="ptext">
+          <span>{{ activeTask.text }}</span>
+          <span v-if="activeTask.right">{{ activeTask.right }}</span>
+        </div>
+        <button v-if="activeTask.cancellable" class="btn block" style="margin-top: 8px" @click="cancelActive">
+          取消
+        </button>
+      </div>
       <div class="sidefoot">v1.0.0 · GPL-3.0 · ffmpeg 9.0.1</div>
     </aside>
 
@@ -494,15 +557,6 @@ const filtersActive = computed(
           已加载 {{ lib.assets.length.toLocaleString() }}/{{ lib.total.toLocaleString() }} ·
           {{ masonry ? "单列" : zoom.columns.value + " 列" }}
         </div>
-      </div>
-
-      <div v-if="lib.scanning" class="scanbar">
-        <div class="scanbar-track"><i></i></div>
-        <span class="scanbar-text">
-          正在重建索引… {{ lib.scanProgress?.files ?? 0 }} 个文件 ·
-          {{ lib.scanProgress?.assets ?? 0 }} 个条目
-        </span>
-        <button class="btn plain" @click="lib.cancelScan">取消</button>
       </div>
 
       <div class="stage" ref="main" @wheel="onWheel">
@@ -748,33 +802,21 @@ const filtersActive = computed(
   padding: 6px 10px 4px;
 }
 
-/* 重建索引：细进度条（非阻塞） */
-.scanbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 16px;
-  background: var(--material);
-  border-bottom: 1px solid var(--separator);
-  font-size: 12px;
-  color: var(--label-2);
+/* 侧栏底部统一进度区 */
+.taskbar {
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--separator);
 }
-.scanbar-track {
+.taskbar .progress {
   position: relative;
-  flex: 1;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--fill);
   overflow: hidden;
 }
-.scanbar-track i {
+/* 不确定型：来回滑动的细条 */
+.progress .indeterminate {
   position: absolute;
   top: 0;
   left: 0;
-  height: 100%;
   width: 30%;
-  border-radius: 2px;
-  background: var(--accent);
   animation: scan-slide 1.1s ease-in-out infinite;
 }
 @keyframes scan-slide {
@@ -785,13 +827,19 @@ const filtersActive = computed(
     left: 100%;
   }
 }
-.scanbar-text {
-  white-space: nowrap;
+/* 按钮内活动指示 */
+.spinner-sm {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+  animation: spin 0.7s linear infinite;
 }
-.scanbar .btn {
-  min-height: 26px;
-  padding: 0 10px;
-  font-size: 12px;
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 欢迎 / 选择资料库 */

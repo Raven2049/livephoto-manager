@@ -233,8 +233,14 @@ function onPointerUp(e: PointerEvent) {
 /* ---------- 键盘可访问：方向键移动焦点，Space 选择，Delete 删除 ---------- */
 const focusedIndex = ref(0);
 const itemCount = computed(() => props.groups.reduce((n, g) => n + g.assets.length, 0));
+// 始终让「首个可见瓦片」可 Tab 进入；用户一旦键盘移动过，就跟随用户位置。
+const tabbableIndex = computed(() => {
+  const fv = firstVisibleIndex();
+  return focusedIndex.value >= fv && focusedIndex.value < fv + 200 ? focusedIndex.value : fv;
+});
 
-function focusIndex(index: number) {
+/** 只让目标瓦片滚入视口（不主动 focus，避免浏览器/点击引发的意外滚动）。 */
+function scrollIndexIntoView(index: number) {
   const el = scroller.value;
   if (!el) return;
   const top = layout.value.indexToY(index);
@@ -244,10 +250,14 @@ function focusIndex(index: number) {
   else if (bottom > el.scrollTop + el.clientHeight - 40) {
     el.scrollTop = bottom - el.clientHeight + 40;
   }
-  // 等虚拟化把目标渲染出来再聚焦
+}
+
+/** 键盘导航：把目标瓦片滚入视口并聚焦。 */
+function focusIndex(index: number) {
+  scrollIndexIntoView(index);
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
-      el.querySelector<HTMLElement>(`.tile[data-index="${index}"]`)?.focus();
+      scroller.value?.querySelector<HTMLElement>(`.tile[data-index="${index}"]`)?.focus();
     }),
   );
 }
@@ -292,14 +302,10 @@ function onTileContextMenu(cell: TileCell, e: MouseEvent) {
   emit("context-menu", cell.asset.id, e.clientX, e.clientY);
 }
 
-/** 滚动区获得焦点（Tab 进入）时，把焦点交给首个可见瓦片。 */
-function onScrollerFocus(e: FocusEvent) {
-  if (e.target !== scroller.value) return;
+/** 首个可见瓦片的序号（用作漫游 tabindex 的落点，避免 Tab 跳到列表顶部）。 */
+function firstVisibleIndex(): number {
   const row = visibleRows.value.find((r) => r.type === "tiles");
-  const cell = row && row.type === "tiles" ? row.cells[0] : null;
-  if (!cell) return;
-  focusedIndex.value = cell.index;
-  focusIndex(cell.index);
+  return row && row.type === "tiles" && row.cells[0] ? row.cells[0].index : 0;
 }
 
 // 1x1 透明 GIF：未加载的瓦片用它占位，避免滚动途中批量发起请求。
@@ -404,22 +410,20 @@ function maybeLoadMore() {
   }
 }
 
-/* ---------- 滚轮平滑滚动 ----------
- * 原生滚轮在单列大图下每格位移过小、手感吃力；这里用「目标位置 + 缓动」驱动
- * scrollTop，并按缩放档位调整每格的位移速率（越小列/单列 → 每格越大）。 */
-let smoothTarget = 0;
-let smoothRaf: number | undefined;
-let animating = false;
-const SMOOTH_EASE = 0.16;
+/* ---------- 滚轮滚动 ----------
+ * 只用浏览器原生的平滑滚动（CSS `scroll-behavior: smooth`），不再自建动画状态机
+ * （曾经因「原生滚动 / 自定义动画 / focus 滚动」三方互相写 scrollTop 反复出 bug）。
+ * 这里仅按缩放档位把滚轮 delta 放大，让单列大图也能滚得动。
+ * 原生动画可被新的滚动输入自然打断，无需处理竞态。 */
 
 /** 每格滚轮的基础位移倍率：单列最大，格子越密越小。 */
 function wheelStep(): number {
-  if (props.masonry) return 1.35;
+  if (props.masonry) return 1.6;
   const c = props.columns;
-  if (c <= 5) return 1.2;
-  if (c <= 7) return 1.05;
-  if (c <= 10) return 0.9;
-  return 0.8;
+  if (c <= 5) return 1.3;
+  if (c <= 7) return 1.1;
+  if (c <= 10) return 0.95;
+  return 0.85;
 }
 
 /** 归一化不同设备的滚轮单位（行/页 → 像素）。 */
@@ -429,44 +433,23 @@ function normalizeDelta(e: WheelEvent): number {
   return e.deltaY;
 }
 
-function smoothTick() {
-  const el = scroller.value;
-  if (!el) {
-    animating = false;
-    smoothRaf = undefined;
-    return;
-  }
-  const diff = smoothTarget - el.scrollTop;
-  if (Math.abs(diff) < 0.7) {
-    el.scrollTop = smoothTarget;
-    animating = false;
-    smoothRaf = undefined;
-    return;
-  }
-  el.scrollTop += diff * SMOOTH_EASE;
-  smoothRaf = requestAnimationFrame(smoothTick);
-}
-
 function onWheel(e: WheelEvent) {
   if (e.ctrlKey) return; // Ctrl+滚轮留给缩放
   const el = scroller.value;
   if (!el) return;
   e.preventDefault();
-  if (!animating) smoothTarget = el.scrollTop;
   const max = Math.max(0, el.scrollHeight - el.clientHeight);
-  smoothTarget = Math.max(0, Math.min(max, smoothTarget + normalizeDelta(e) * wheelStep()));
-  if (!animating) {
-    animating = true;
-    smoothRaf = requestAnimationFrame(smoothTick);
-  }
+  const dest = Math.max(
+    0,
+    Math.min(max, el.scrollTop + normalizeDelta(e) * wheelStep()),
+  );
+  el.scrollTo({ top: dest, behavior: "smooth" });
 }
 
 let ticking = false;
 let lastScrollY = 0;
 let lastBandLoad = 0;
 function onScroll() {
-  // 非动画期间（拖动滚动条 / 键盘）同步目标位置，避免与平滑动画打架。
-  if (!animating) smoothTarget = scroller.value?.scrollTop ?? 0;
   // 滚动期间与停稳后的短时间内都不触发悬停预览（设计 §7.3）。
   emit("suppress");
 
@@ -548,12 +531,8 @@ function restoreAnchor(anchor: Anchor | null) {
   const y = layout.value.indexToY(anchor.index);
   const h = layout.value.indexHeight(anchor.index);
   const dest = Math.max(0, y + anchor.fy * h - anchor.viewportY);
-  // 平滑滑到锚点（与滚轮平滑共用一套动画），避免换挡时生硬跳动。
-  smoothTarget = dest;
-  if (!animating) {
-    animating = true;
-    smoothRaf = requestAnimationFrame(smoothTick);
-  }
+  // 平滑滑到锚点，避免换挡时生硬跳动（交给原生平滑滚动）。
+  el.scrollTo({ top: dest, behavior: "smooth" });
 }
 
 let ro: ResizeObserver | null = null;
@@ -587,7 +566,6 @@ onBeforeUnmount(() => {
   scroller.value?.removeEventListener("wheel", onWheel);
   scroller.value?.removeEventListener("mousemove", onMouseMove);
   scroller.value?.removeEventListener("mouseleave", onMouseLeave);
-  if (smoothRaf !== undefined) cancelAnimationFrame(smoothRaf);
   if (reflowTimer !== undefined) clearTimeout(reflowTimer);
   if (hoverResumeTimer !== undefined) clearTimeout(hoverResumeTimer);
 });
@@ -614,13 +592,7 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
 </script>
 
 <template>
-  <div
-    ref="scroller"
-    class="scroller"
-    tabindex="0"
-    @scroll.passive="onScroll"
-    @focus="onScrollerFocus"
-  >
+  <div ref="scroller" class="scroller" @scroll.passive="onScroll">
     <div
       class="canvas"
       :class="{ reflowing }"
@@ -642,7 +614,7 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
             :class="{ selected: props.selected.has(cell.asset.id) }"
             :data-id="cell.asset.id"
             :data-index="cell.index"
-            :tabindex="cell.index === focusedIndex ? 0 : -1"
+            :tabindex="cell.index === tabbableIndex ? 0 : -1"
             role="button"
             :aria-pressed="props.selected.has(cell.asset.id)"
             :aria-label="cell.asset.base_name"
@@ -690,11 +662,11 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--bg);
+  /* 原生平滑滚动：滚轮/换挡锚点都交给浏览器，避免自建动画的竞态 */
+  scroll-behavior: smooth;
 }
 /* 焦点会立即转入瓦片，容器本身不画焦点环 */
-.scroller:focus-visible {
-  outline: none;
-}
+
 .canvas {
   position: relative;
   width: 100%;

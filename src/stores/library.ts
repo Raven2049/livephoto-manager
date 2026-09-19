@@ -210,16 +210,32 @@ export const useLibrary = defineStore("library", () => {
     }
   }
 
-  async function classify() {
+  const classifyProgress = ref<{ total: number; done: number } | null>(null);
+
+  /** 返回是否被取消。 */
+  async function classify(): Promise<boolean> {
     busy.value = true;
     error.value = null;
+    classifyProgress.value = null;
+    const un = await listen<{ total: number; done: number }>(
+      "classify://progress",
+      (e) => {
+        classifyProgress.value = e.payload;
+      },
+    );
     try {
-      await invoke("classify_library");
+      const r = await invoke<{ total: number; changed: number; cancelled: boolean }>(
+        "classify_library",
+      );
       await refresh();
+      return r.cancelled;
     } catch (e) {
       error.value = String(e);
+      return false;
     } finally {
+      un();
       busy.value = false;
+      classifyProgress.value = null;
     }
   }
 
@@ -382,6 +398,7 @@ export const useLibrary = defineStore("library", () => {
     scanning,
     scanProgress,
     cancelScan,
+    classifyProgress,
     error,
     thumbs,
     filter,
