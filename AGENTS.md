@@ -80,6 +80,23 @@
 - [x] **计划 10（阶段 9 界面改版）实现完成**：原生 Vue+CSS，左侧栏 + 主区、跟随系统深浅、
   toast/确认框/空状态/进度；按 `apple-hig` 经典 HIG，排除 iOS 26+ Liquid Glass（见「已定的关键约束」）。
   验证：`vue-tsc`、`npm run build`、`tauri dev` 用户确认「看着还不错」
+- [x] **改版后打磨（UI/UX 审查 P0，2026-09-18）**：欢迎/最近库启动页、单列大图流、方角网格 + 2px 间隔、
+  按行预载、滚轮平滑滚动、拖拽涂抹（可回拖撤销）、单击取消、键盘导航（Tab/方向键/Space/Delete）、
+  右键菜单、页脚加载态修正、导入取消提示、空结果「清空筛选」、最近库持久化（exe 同目录 `recent.json`）、
+  重建索引非阻塞进度 + 取消、打开库自动重建/补缩略图、`larges/` 按需高清大图（`ensure_large`）
+  - **P1/P2/P3 待办**见 `docs/superpowers/plans/2026-09-18-stage9-ui-redesign.md` 末尾与本文「UI 待打磨」
+  - 已知取舍：日期头不吸附；单列用 2000px WebP（比 512 缩略图清晰，非原图）；`recent.json` 放只读目录时不记忆
+
+### UI 待打磨（下一轮候选，按 HIG 审查得出）
+
+- **P1 反馈**：进度位置统一（现导入在侧栏、重建索引在工具栏下，违反 `progress-indicators.md` 固定位置）；
+  导入主按钮内活动指示（`buttons.md`）；`校验标识` 进行中指示；**去掉琐碎成功 toast**
+  （`feedback.md`「只在足够重要时才确认成功」）；删除确认改为仅批量/大文件才弹
+  （`feedback.md`「预期内的删除不必警告」）
+- **P2 视觉/收敛**：工具栏过载（日期区间/完整性收进「筛选」气泡、粒度进「更多」，`toolbars.md`）；
+  悬停阴影盖相邻图（改内描边）；小瓦片勾选徽标按尺寸缩放；「更多」菜单键盘导航
+- **P3 清理**：死代码（`app.css` 的 `.action`、App.vue 的 `.empty-logo`、`--r-tile`、`AppIcon.play/x`）
+- **缺口**：单击看大图（设计 §7.1）；日期头吸附
 
 **下一步：按 `docs/releasing.md` 做首次发布（打 tag + `gh release`）。可选后续：NSIS 安装包、代码签名。**
 
@@ -166,6 +183,11 @@
 
 ### 本机环境快照（2026-09-18 就绪）
 
+> **MSYS2（裁剪 ffmpeg 用）**：装在 `C:\msys64`（winget 下载被墙，用清华镜像
+> `https://mirrors.tuna.tsinghua.edu.cn/msys2/distrib/msys2-x86_64-latest.exe` 装的）。
+> 已装 `mingw-w64-x86_64-gcc/binutils/nasm/x264/libwebp/pkgconf`。
+> 裁剪产物：`C:\Users\Raven\ffmpeg-build\out\bin`（仓库外）。**HEIC 解码必须带 `xstack` 滤镜**。
+
 > 下面是某一台具体机器的状态，**换机后必须重新核对**，不要直接采信。
 
 - Rust `1.98.1`（`cargo` / `clippy 0.1.98` / `rustfmt 1.9.0`）
@@ -216,12 +238,20 @@ livephoto-manager/
 │       ├── ffmpeg.rs             ffmpeg 定位与参数构造
 │       ├── thumb.rs              缩略图 / 预览片生成
 │       ├── protocol.rs           lpm:// 自定义协议
-│       ├── commands.rs           Tauri 命令
+│       ├── export.rs             多选导出（原样拷贝配对文件）
+│       ├── delete.rs             回收站删除 + 孤儿缓存清理
+│       ├── commands.rs           Tauri 命令（含 recent/scan/ensure_large）
 │       └── state.rs              应用状态
 ├── src/                          阶段 1 起：Vue 前端
-│   ├── components/PhotoGrid.vue  虚拟滚动网格
-│   ├── composables/useZoom.ts    Ctrl+滚轮缩放
-│   ├── lib/lpm.ts                lpm:// 协议封装
+│   ├── components/PhotoGrid.vue  虚拟滚动网格（长按/拖拽选择、键盘、右键）
+│   ├── components/FilterBar.vue  工具栏内联筛选
+│   ├── components/AppIcon.vue    内联 SVG 图标
+│   ├── composables/useZoom.ts    Ctrl+滚轮缩放（1/3/5/7/10/14 档）
+│   ├── composables/usePreview.ts 悬停预览（全局唯一 <video>）
+│   ├── lib/{lpm,timeline,gridLayout}.ts
+│   ├── styles/app.css            HIG 设计令牌（跟随系统深浅）
 │   └── stores/{import,library}.ts
+├── scripts/                      绿色版打包（build-ffmpeg / package-portable / deps-check）
+└── docs/mockups/                 静态 UI 参考稿（非构建产物）
 └── docs/superpowers/             设计文档、计划、实测记录
 ```
