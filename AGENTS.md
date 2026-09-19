@@ -144,6 +144,16 @@
 
 1. **分发形态 = 绿色版（免安装）** —— 解压即用、免管理员、不写注册表；不追求单文件 exe。见设计文档 §11 与附录 A 决策 20。**后续的打包计划（对应设计 §13 第 9 步）必须落实：** `tauri build --no-bundle` 后组装 zip（裸 exe + 同目录 DLL + `resources/`）、ffmpeg sidecar 放入 `resources/` 并用 `BaseDirectory::Resource` 解析、WebView2 缺失说明、SmartScreen 未签名提示。
 
+## 教训（踩过的坑，别再犯）
+
+- **滚动相关改动必须实机验证三种交互**：滚轮、拖动滚动条、点击空白。`vue-tsc`/`build` 抓不到滚动竞态。
+- **不要自建滚动动画状态机**。曾同时存在「原生滚动 / 自定义缓动动画 / `focus()` 滚动」三方写 `scrollTop`，
+  靠标志位互相猜，反复出 bug（点击跳、拖滚动条回弹、动画自我掐停）。现统一用原生
+  `scroll-behavior: smooth` + `scrollTo({behavior})`，见 `PhotoGrid.vue`。
+- **不要给滚动容器加 `tabindex` + `@focus` 去转发焦点**：点击空白/拖滚动条会触发 `focus()` 把视图滚回去。
+  键盘可达性用「漫游 tabindex」（首个可见瓦片为 `tabindex=0`）实现。
+- **`focus()` / `scrollIntoView()` 会滚动容器**：只在明确的键盘导航里用，且先手动把目标滚入视口。
+
 ## 工作流要求
 
 - **分支**：开发在 `dev` 分支；`main` 只收已完成的里程碑
