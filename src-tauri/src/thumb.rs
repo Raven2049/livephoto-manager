@@ -130,7 +130,67 @@ pub fn make_thumb_for_movie(ffmpeg_bin: &Path, input: &Path, thumbs_dir: &Path) 
     make(ffmpeg_bin, input, thumbs_dir, true)
 }
 
-/// 高分大图文件名：`<hash>.webp`（放在 `larges/`，与缩略图同扩展名但目录不同）。
+/// 单张查看的临时大图文件名：`<hash>.webp`。
+pub fn view_file_name(hash: &str) -> String {
+    format!("{hash}.webp")
+}
+
+/// 单张查看缓存总量上限（超出按最旧清理）。
+const VIEW_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+/// 生成/复用「单张查看」用的原分辨率大图（JPEG，临时缓存 + LRU）。
+pub fn make_view(ffmpeg_bin: &Path, input: &Path, view_dir: &Path) -> Result<PathBuf> {
+    std::fs::create_dir_all(view_dir)?;
+    let out = view_dir.join(view_file_name(&content_hash(input)?));
+    if out.is_file() {
+        return Ok(out);
+    }
+    let mut tmp = out.clone().into_os_string();
+    tmp.push(".part");
+    let tmp = PathBuf::from(tmp);
+
+    if let Err(e) = ffmpeg::run(ffmpeg_bin, &ffmpeg::view_args(input, &tmp)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    std::fs::rename(&tmp, &out)?;
+    prune_view_cache(view_dir, VIEW_CACHE_MAX_BYTES);
+    Ok(out)
+}
+
+/// 超出上限时删除最旧（按修改时间）的查看图（不改目录结构）。
+fn prune_view_cache(dir: &Path, max_bytes: u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = Vec::new();
+    let mut total = 0u64;
+    for e in entries.flatten() {
+        let Ok(meta) = e.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        total += meta.len();
+        let atime = meta.accessed().or_else(|_| meta.modified()).ok();
+        if let Some(atime) = atime {
+            files.push((atime, meta.len(), e.path()));
+        }
+    }
+    if total <= max_bytes {
+        return;
+    }
+    files.sort_by_key(|(t, _, _)| *t);
+    for (_, size, path) in files {
+        if total <= max_bytes {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(size);
+        }
+    }
+}
+
+/// 高分大图文件名：`<hash>.webp`（放在 `larges/`）。
 pub fn large_file_name(hash: &str) -> String {
     format!("{hash}.webp")
 }

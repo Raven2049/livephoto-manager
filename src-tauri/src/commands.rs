@@ -734,6 +734,37 @@ pub async fn classify_library(
     .map_err(|e| format!("{e:#}"))
 }
 
+/// 确保某条目的原分辨率查看图存在（单张查看用）；返回其绝对路径。
+/// 缓存到 `.lpm/view`（临时、带 LRU），源优先静态图，其次视频首帧。
+#[tauri::command]
+pub async fn ensure_view(
+    asset_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<String> {
+        let lib = Library::open(&root)?;
+        let conn = crate::db::open(&lib.db_path())?;
+        let files = crate::db::assets_by_ids(&conn, &[asset_id])?;
+        let f = files
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("条目不存在"))?;
+        let source = f
+            .still_path
+            .clone()
+            .or_else(|| f.movie_path.clone())
+            .ok_or_else(|| anyhow::anyhow!("该条目没有可用的源文件"))?;
+        let bin = crate::ffmpeg::find_ffmpeg()?;
+        let p = crate::thumb::make_view(&bin, Path::new(&source), &lib.view_tmp_dir())?;
+        Ok(p.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
+}
+
 /// 确保某条目的高分大图存在（单列浏览用）；返回其绝对路径。
 /// 源优先静态图，其次视频首帧；由 ffmpeg 生成 WebP 并缓存。
 #[tauri::command]

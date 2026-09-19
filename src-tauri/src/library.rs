@@ -11,6 +11,8 @@ pub const PREVIEWS: &str = "previews";
 /// 高分大图缓存（单列浏览用，按需生成）。
 pub const LARGES: &str = "larges";
 pub const META_DIR: &str = ".lpm";
+/// 单张查看的临时大图目录（在 `.lpm` 下，属可随时删除的缓存）。
+pub const VIEW_TMP: &str = "view";
 pub const DB_FILE: &str = "index.db";
 
 impl Library {
@@ -43,6 +45,10 @@ impl Library {
     }
     pub fn db_path(&self) -> PathBuf {
         self.meta_dir().join(DB_FILE)
+    }
+    /// 单张查看用的临时大图目录（`.lpm/view`，随缓存清理）。
+    pub fn view_tmp_dir(&self) -> PathBuf {
+        self.meta_dir().join(VIEW_TMP)
     }
 
     fn ensure_structure(&self) -> std::io::Result<()> {

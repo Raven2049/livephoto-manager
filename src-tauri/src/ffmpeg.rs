@@ -139,6 +139,28 @@ pub fn large_args(input: &Path, output: &Path) -> Vec<String> {
     ]
 }
 
+/// 单张查看用的大图：原分辨率、WebP 高质量（不缩放）。
+/// 用 libwebp（裁剪构建已启用），不用 mjpeg（未启用）。
+pub fn view_args(input: &Path, output: &Path) -> Vec<String> {
+    vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-y".into(),
+        "-i".into(),
+        input.to_string_lossy().into_owned(),
+        "-frames:v".into(),
+        "1".into(),
+        "-c:v".into(),
+        "libwebp".into(),
+        "-q:v".into(),
+        "95".into(),
+        "-f".into(),
+        "webp".into(),
+        output.to_string_lossy().into_owned(),
+    ]
+}
+
 /// 与 ffmpeg 同目录的 ffprobe。
 pub fn find_ffprobe() -> anyhow::Result<PathBuf> {
     let ff = find_ffmpeg()?;
@@ -236,6 +258,15 @@ mod tests {
         let a = large_args(Path::new("in.heic"), Path::new("out.webp.part"));
         assert!(a.iter().any(|x| x.contains("min(2000,iw)")));
         assert!(a.contains(&"libwebp".to_string()));
+        assert_eq!(a.last().unwrap(), "out.webp.part");
+    }
+
+    #[test]
+    fn view_args_are_full_res_webp() {
+        let a = view_args(Path::new("in.heic"), Path::new("out.webp.part"));
+        assert!(a.contains(&"libwebp".to_string()));
+        assert!(a.contains(&"-frames:v".to_string()));
+        assert!(!a.iter().any(|x| x.starts_with("scale=")), "查看图不缩放");
         assert_eq!(a.last().unwrap(), "out.webp.part");
     }
 

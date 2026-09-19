@@ -71,6 +71,7 @@ pub fn run() {
             commands::cancel_scan,
             commands::ensure_preview,
             commands::ensure_large,
+            commands::ensure_view,
             commands::classify_library,
             commands::export_diagnostics,
             commands::export_assets,
