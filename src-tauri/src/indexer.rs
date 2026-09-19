@@ -41,9 +41,13 @@ pub fn scan_library_with(
         return Ok(summary);
     }
 
+    // 整次扫描包在一个事务里：否则每条 upsert 都是独立事务并逐条落盘，
+    // 在机械盘/被杀软扫描的盘上会慢到不可用（实测 2000 条约 150s → 事务内 <1s）。
+    let tx = conn.unchecked_transaction()?;
     // 先把全部条目置 missing=1；命中的目录 upsert 时会清回 0。
-    crate::db::mark_all_missing(conn)?;
-    walk(&root, &root, conn, cancel, &mut summary, &mut on_progress)?;
+    crate::db::mark_all_missing(&tx)?;
+    walk(&root, &root, &tx, cancel, &mut summary, &mut on_progress)?;
+    tx.commit()?;
     Ok(summary)
 }
 
@@ -248,5 +252,74 @@ mod tests {
             .unwrap();
         assert_eq!(n, 1, "重扫不应新增重复条目");
         assert_eq!(taken, 12345, "已有条目的 taken_at 必须保留");
+    }
+
+    /// 真实目录冒烟：对 `LIVEPORTER_SMOKE_DIR` 指向的相册目录做一次扫描并打印统计。
+    /// 只读取源文件、只在库根创建隐藏 `.lpm/`，不移动/改名任何照片。
+    ///
+    /// 运行：
+    /// `$env:LIVEPORTER_SMOKE_DIR="D:\图片\Pictures\MI10PRO"`;
+    /// `cargo test -p liveporter --lib real_directory_scan_smoke -- --ignored --nocapture`
+    #[test]
+    #[ignore = "requires a real photo directory (set LIVEPORTER_SMOKE_DIR)"]
+    fn real_directory_scan_smoke() {
+        let dir = match std::env::var("LIVEPORTER_SMOKE_DIR") {
+            Ok(d) if !d.is_empty() => d,
+            _ => {
+                eprintln!("未设置 LIVEPORTER_SMOKE_DIR，跳过");
+                return;
+            }
+        };
+        let lib = Library::open(&dir).unwrap();
+        let conn = db::open(&lib.db_path()).unwrap();
+
+        let started = std::time::Instant::now();
+        let s = scan(&lib, &conn).unwrap();
+        let stats = db::stats(&conn).unwrap();
+
+        let noise: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM asset WHERE dir LIKE '.lpm%' OR base_name LIKE '%hash%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(noise, 0, "不得把 .lpm 缓存当照片索引");
+
+        let dirs: i64 = conn
+            .query_row("SELECT count(DISTINCT dir) FROM asset", [], |r| r.get(0))
+            .unwrap();
+
+        eprintln!("== 扫描完成 ==");
+        eprintln!("库根: {}", lib.root().display());
+        eprintln!("耗时: {:?}", started.elapsed());
+        eprintln!("文件: {}  条目: {}  目录数: {}", s.files, s.assets, dirs);
+        eprintln!(
+            "统计: total={} live={} photo={} video={} missing={} missing_thumbs={}",
+            stats.total, stats.live, stats.photo, stats.video, stats.missing, stats.missing_thumbs
+        );
+        eprintln!("完整性分布: {:?}", stats.by_integrity);
+
+        eprintln!("-- 抽样（base_name | dir | kind | taken_at）--");
+        let mut stmt = conn
+            .prepare("SELECT base_name, dir, kind, taken_at FROM asset ORDER BY id LIMIT 12")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .unwrap();
+        for row in rows {
+            let (b, d, k, t) = row.unwrap();
+            eprintln!(
+                "  {b}  |  {}  |  kind={k}  taken_at={t}",
+                if d.is_empty() { "<根>" } else { &d }
+            );
+        }
     }
 }
