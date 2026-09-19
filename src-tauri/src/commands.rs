@@ -88,13 +88,45 @@ pub fn forget_library(path: String) -> Vec<RecentLibrary> {
     with_exists(list)
 }
 
+/// 校验用户选择的资料库根目录。
+///
+/// `lpm://` 协议的白名单根取自这里，所以要挡住「盘根 / 系统目录」这类明显危险的位置：
+/// 一旦前端被注入，`open_library` 就是扩大可读文件范围的入口。只拒绝明显危险项，
+/// 不要求目录为空（用户可指向已有照片的目录当库）。
+fn validate_library_root(path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err("目录不存在或已被移动".to_string());
+    }
+    let canonical = std::fs::canonicalize(path).map_err(|_| "目录不存在或已被移动".to_string())?;
+    // 盘根（如 `C:\`）没有父目录，拒绝。
+    if canonical.parent().is_none() {
+        return Err("不能把盘根作为资料库".to_string());
+    }
+    // 系统目录及其上级同样拒绝。
+    for key in [
+        "SystemRoot",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramData",
+    ] {
+        let Ok(sys) = std::env::var(key) else {
+            continue;
+        };
+        let Ok(sys) = std::fs::canonicalize(&sys) else {
+            continue;
+        };
+        if sys.starts_with(&canonical) {
+            return Err("不能把系统目录或其上级作为资料库".to_string());
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn open_library(path: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
     // 必须是已存在的目录：避免「最近资料库」被移动后误建一个空库。
-    if !p.is_dir() {
-        return Err("目录不存在或已被移动".to_string());
-    }
+    validate_library_root(&p)?;
     state.open(p.clone()).map_err(|e| e.to_string())?;
     let name = p
         .file_name()
@@ -652,6 +684,7 @@ pub struct ClassifyProgress {
 #[tauri::command]
 pub async fn classify_library(
     app: tauri::AppHandle,
+    assume_cloud: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<ClassifySummary, String> {
     let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
@@ -694,7 +727,7 @@ pub async fn classify_library(
                 still_id.as_deref(),
                 movie_id.as_deref(),
                 job.still_size.unwrap_or(0).max(0) as u64,
-                false,
+                assume_cloud,
             );
             crate::db::set_content_id(
                 &conn,
@@ -855,4 +888,33 @@ pub async fn ensure_preview(
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| format!("{e:#}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_root_accepts_temp_dir() {
+        assert!(validate_library_root(&std::env::temp_dir()).is_ok());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn library_root_rejects_drive_root() {
+        assert!(validate_library_root(Path::new("C:\\")).is_err());
+    }
+
+    #[test]
+    fn library_root_rejects_system_dir() {
+        if let Ok(sys) = std::env::var("SystemRoot") {
+            assert!(validate_library_root(Path::new(&sys)).is_err());
+        }
+    }
+
+    #[test]
+    fn library_root_rejects_missing_dir() {
+        let missing = std::env::temp_dir().join("lpm_definitely_missing_dir_12345");
+        assert!(validate_library_root(&missing).is_err());
+    }
 }

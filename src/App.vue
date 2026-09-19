@@ -26,9 +26,17 @@ let toastSeq = 0;
 function toast(text: string, kind: "info" | "error" = "info", copy?: string) {
   const id = ++toastSeq;
   toasts.value = [...toasts.value, { id, text, kind, copy }];
-  window.setTimeout(() => {
-    toasts.value = toasts.value.filter((t) => t.id !== id);
-  }, 4000);
+  // accessibility.md:96：错误提示不自动消失，避免用户错过；信息提示 4s 后收起。
+  if (kind === "info") {
+    window.setTimeout(() => dismissToast(id), 4000);
+  }
+}
+function dismissToast(id: number) {
+  toasts.value = toasts.value.filter((t) => t.id !== id);
+}
+function onToastClick(t: Toast) {
+  if (t.copy) void copyText(t.copy);
+  else dismissToast(t.id);
 }
 function toastError() {
   if (lib.error) {
@@ -112,7 +120,7 @@ async function doThumbs() {
 }
 
 async function doClassify() {
-  const cancelled = await lib.classify();
+  const cancelled = await lib.classify(assumeCloud.value);
   if (lib.error) toastError();
   else if (cancelled) toast("已取消校验");
 }
@@ -615,7 +623,13 @@ const filtersActive = computed(
           <span v-if="imp.running" class="spinner-sm" aria-hidden="true"></span>
           <AppIcon v-else name="iphone" />{{ imp.running ? "导入中…" : "从 iPhone 导入" }}
         </button>
-        <label class="switch" :class="{ on: assumeCloud }" @click.prevent="assumeCloud = !assumeCloud">
+        <label class="switch" :class="{ on: assumeCloud }">
+          <input
+            type="checkbox"
+            role="switch"
+            class="switch-input"
+            v-model="assumeCloud"
+          />
           <span class="track"><i></i></span>原件可能不在手机
         </label>
       </div>
@@ -734,9 +748,10 @@ const filtersActive = computed(
         v-for="t in toasts"
         :key="t.id"
         class="toast"
-        :class="[t.kind, { clickable: t.copy }]"
-        :title="t.copy ? '点击复制' : ''"
-        @click="t.copy && copyText(t.copy)"
+        :class="[t.kind, 'clickable']"
+        :role="t.kind === 'error' ? 'alert' : 'status'"
+        :title="t.copy ? '点击复制' : '点击关闭'"
+        @click="onToastClick(t)"
       >
         <AppIcon :name="t.kind === 'error' ? 'warn' : 'check'" :size="15" />
         <span>{{ t.text }}</span>
@@ -895,7 +910,7 @@ const filtersActive = computed(
 }
 .menu-label {
   font-size: 11px;
-  color: var(--label-3);
+  color: var(--label-2);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   padding: 4px 10px 2px;
@@ -1007,7 +1022,7 @@ const filtersActive = computed(
 .group-title {
   font-size: 11px;
   font-weight: 600;
-  color: var(--label-3);
+  color: var(--label-2);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin: 0 6px 8px;
@@ -1076,7 +1091,7 @@ const filtersActive = computed(
   color: var(--label-2);
 }
 .row-chevron {
-  color: var(--label-3);
+  color: var(--label-2);
   font-size: 18px;
   margin-left: auto;
 }
@@ -1139,7 +1154,7 @@ const filtersActive = computed(
 .sec-title {
   font-size: 11px;
   font-weight: 600;
-  color: var(--label-3);
+  color: var(--label-2);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 8px 6px 6px;
@@ -1199,7 +1214,7 @@ const filtersActive = computed(
   padding: 12px 16px;
   border-top: 1px solid var(--separator);
   font-size: 11px;
-  color: var(--label-3);
+  color: var(--label-2);
 }
 
 /* 主区 */

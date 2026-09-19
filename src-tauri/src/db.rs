@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::livephoto::{INTEGRITY_STILL_ONLY, INTEGRITY_VIDEO_ONLY};
 use crate::pairing::{FileRef, PairedAsset};
 
 pub const SCHEMA_VERSION: i64 = 1;
@@ -182,23 +183,42 @@ pub fn upsert_asset(
 
 /// 重扫专用：同一 (device_id, base_name) 若已有条目，沿用其 taken_at；否则用 0。
 ///
-/// `indexer`（扫描磁盘）拿不到拍摄时间，若直接用 0 会与导入时写入的真 `taken_at`
-/// 组成不同的业务键，导致重扫新增重复行。它只能防止继续产生重复，
-/// 不能清理历史遗留的重复行（那些行 `taken_at` 已然不同）。
+/// 同时**保留**已验证的 integrity（1 不一致 / 2 残缺 / 5 疑似副本）：这些值由导入或
+/// 「校验标识」读 ContentIdentifier 得出，而重扫只按「文件是否在场」配对，直接覆盖会
+/// 把它们抹成 0/3/4。仅当在场形态变化时（例如视频被删）才用新的形态值覆盖。
 pub fn upsert_asset_preserving_taken_at(
     conn: &Connection,
     device_id: i64,
     asset: &PairedAsset,
 ) -> rusqlite::Result<()> {
-    let existing: Option<i64> = conn
+    let existing: Option<(i64, i64)> = conn
         .query_row(
-            "SELECT taken_at FROM asset WHERE device_id = ?1 AND base_name = ?2
+            "SELECT taken_at, integrity FROM asset WHERE device_id = ?1 AND base_name = ?2
              ORDER BY taken_at DESC LIMIT 1",
             params![device_id, asset.base_name],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
-    upsert_asset(conn, device_id, asset, existing.unwrap_or(0))
+    let (taken_at, old_integrity) = match existing {
+        Some((t, i)) => (t, Some(i)),
+        None => (0, None),
+    };
+    // 形态不变 → 保留旧分类；形态变了 → 用新的在场值。
+    let keep =
+        old_integrity.is_some_and(|old| presence_shape(old) == presence_shape(asset.integrity));
+    upsert_asset(conn, device_id, asset, taken_at)?;
+    if let Some(old) = old_integrity.filter(|old| keep && *old != asset.integrity) {
+        set_integrity(conn, device_id, &asset.base_name, taken_at, old)?;
+    }
+    Ok(())
+}
+
+/// integrity 的「在场形态」：3 = 仅静态，4 = 仅视频，其余（0/1/2/5）都建立在两侧在场之上。
+fn presence_shape(integrity: i64) -> i64 {
+    match integrity {
+        INTEGRITY_STILL_ONLY | INTEGRITY_VIDEO_ONLY => integrity,
+        _ => 0,
+    }
 }
 
 /// 扫描前把某设备下所有条目置 missing=1；命中的条目会在 upsert 时清回 0。

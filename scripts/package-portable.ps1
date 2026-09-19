@@ -13,7 +13,11 @@
 param(
     [string]$FfmpegDir = "",
     [string]$OutDir = "dist-portable",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$SkipDepsCheck,
+    [switch]$SkipFfmpegHashCheck,
+    # Compute the current ffmpeg/ffprobe hashes and (re)write scripts/ffmpeg.sha256.
+    [switch]$RecordFfmpegHash
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,6 +39,54 @@ $ffprobe = Join-Path $FfmpegDir "ffprobe.exe"
 if (-not (Test-Path -LiteralPath $ffmpeg)) { Write-Error "ffmpeg.exe not found in: $FfmpegDir"; exit 1 }
 if (-not (Test-Path -LiteralPath $ffprobe)) { Write-Error "ffprobe.exe not found in: $FfmpegDir"; exit 1 }
 
+# --- ffmpeg provenance: version/hash pinning ---------------------------------
+$manifestPath = Join-Path $PSScriptRoot "ffmpeg.sha256"
+$ffHash = (Get-FileHash -LiteralPath $ffmpeg -Algorithm SHA256).Hash
+$fpHash = (Get-FileHash -LiteralPath $ffprobe -Algorithm SHA256).Hash
+
+if ($RecordFfmpegHash) {
+    $manifest = @(
+        "# Expected SHA-256 of the trimmed FFmpeg binaries bundled by the portable build.",
+        "# Verified by scripts/package-portable.ps1 before staging (fail on mismatch).",
+        "#",
+        "# Regenerate after rebuilding ffmpeg:",
+        "#   powershell -ExecutionPolicy Bypass -File scripts/package-portable.ps1 ``",
+        "#       -RecordFfmpegHash -FfmpegDir <dir> -SkipBuild -SkipDepsCheck",
+        "#",
+        "# Format: <sha256>  <filename>",
+        "$ffHash  ffmpeg.exe",
+        "$fpHash  ffprobe.exe"
+    )
+    Set-Content -LiteralPath $manifestPath -Value $manifest -Encoding ASCII
+    Write-Host "==> wrote $manifestPath"
+} elseif ($SkipFfmpegHashCheck) {
+    Write-Warning "Skipping ffmpeg hash verification (-SkipFfmpegHashCheck)."
+} elseif (Test-Path -LiteralPath $manifestPath) {
+    $expected = @{}
+    foreach ($line in Get-Content -LiteralPath $manifestPath) {
+        if ($line -match '^\s*#') { continue }
+        if ($line -match '^([0-9A-Fa-f]{64})\s+(\S+)\s*$') { $expected[$Matches[2]] = $Matches[1].ToUpper() }
+    }
+    foreach ($item in @(@('ffmpeg.exe', $ffHash), @('ffprobe.exe', $fpHash))) {
+        $name = $item[0]
+        $actual = $item[1]
+        if (-not $expected.ContainsKey($name)) {
+            Write-Error "scripts/ffmpeg.sha256 has no entry for $name. Regenerate with -RecordFfmpegHash."
+            exit 1
+        }
+        if ($actual -ne $expected[$name]) {
+            Write-Error ("ffmpeg hash mismatch for ${name}:`n  expected $($expected[$name])`n  actual   $actual`n" +
+                "Rebuild ffmpeg or update scripts/ffmpeg.sha256 with -RecordFfmpegHash.")
+            exit 1
+        }
+        Write-Host "==> $name SHA256 OK"
+    }
+    $ffVersion = (& $ffmpeg -version 2>&1 | Select-Object -First 1)
+    Write-Host "==> $ffVersion"
+} else {
+    Write-Warning "scripts/ffmpeg.sha256 not found; skipping ffmpeg hash verification."
+}
+
 # --- version ---------------------------------------------------------------
 $confPath = Join-Path $root "src-tauri/tauri.conf.json"
 $version = (Get-Content -LiteralPath $confPath -Raw | ConvertFrom-Json).version
@@ -53,6 +105,18 @@ if (-not $SkipBuild) {
 
 $exe = Join-Path $root "target/release/liveporter.exe"
 if (-not (Test-Path -LiteralPath $exe)) { Write-Error "Release exe not found: $exe"; exit 1 }
+
+# --- dependency gate: every non-system DLL must be bundled -------------------
+if ($SkipDepsCheck) {
+    Write-Warning "Skipping dependency check (-SkipDepsCheck)."
+} else {
+    Write-Host "==> deps-check.ps1 $exe"
+    & (Join-Path $PSScriptRoot "deps-check.ps1") -Exe $exe -FailOnFound
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "deps-check found non-system DLLs; add them to `$runtimeDlls below and re-run."
+        exit $LASTEXITCODE
+    }
+}
 
 # --- stage -----------------------------------------------------------------
 $stage = Join-Path $root $OutDir

@@ -212,8 +212,8 @@ export const useLibrary = defineStore("library", () => {
 
   const classifyProgress = ref<{ total: number; done: number } | null>(null);
 
-  /** 返回是否被取消。 */
-  async function classify(): Promise<boolean> {
+  /** 返回是否被取消。`assumeCloud` 与导入开关共用：勾选后才做「疑似非原件」判定。 */
+  async function classify(assumeCloud = false): Promise<boolean> {
     busy.value = true;
     error.value = null;
     classifyProgress.value = null;
@@ -226,6 +226,7 @@ export const useLibrary = defineStore("library", () => {
     try {
       const r = await invoke<{ total: number; changed: number; cancelled: boolean }>(
         "classify_library",
+        { assumeCloud },
       );
       await refresh();
       return r.cancelled;

@@ -220,4 +220,91 @@ mod tests {
         assert_eq!(n, 1, "重扫不应新增重复条目");
         assert_eq!(taken, 12345, "已有条目的 taken_at 必须保留");
     }
+
+    #[test]
+    fn rescan_preserves_validated_integrity() {
+        let root = std::env::temp_dir().join("lpm_indexer_integrity");
+        let _ = std::fs::remove_dir_all(&root);
+        let lib = Library::open(&root).unwrap();
+        let year = lib.originals_dir().join("dev").join("2024");
+        std::fs::create_dir_all(&year).unwrap();
+        std::fs::write(year.join("IMG_1.HEIC"), b"a").unwrap();
+        std::fs::write(year.join("IMG_1.MOV"), b"bb").unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        scan(&lib, &conn).unwrap();
+
+        let (dev, taken): (i64, i64) = conn
+            .query_row(
+                "SELECT device_id, taken_at FROM asset WHERE base_name='IMG_1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        // 模拟导入/校验发现的 UUID 不一致。
+        db::set_integrity(
+            &conn,
+            dev,
+            "IMG_1",
+            taken,
+            crate::livephoto::INTEGRITY_MISMATCH,
+        )
+        .unwrap();
+
+        scan(&lib, &conn).unwrap();
+        let integrity: i64 = conn
+            .query_row(
+                "SELECT integrity FROM asset WHERE base_name='IMG_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            integrity,
+            crate::livephoto::INTEGRITY_MISMATCH,
+            "重扫不得抹掉已验证的分类"
+        );
+    }
+
+    #[test]
+    fn rescan_updates_integrity_when_shape_changes() {
+        let root = std::env::temp_dir().join("lpm_indexer_integrity_shape");
+        let _ = std::fs::remove_dir_all(&root);
+        let lib = Library::open(&root).unwrap();
+        let year = lib.originals_dir().join("dev").join("2024");
+        std::fs::create_dir_all(&year).unwrap();
+        std::fs::write(year.join("IMG_1.HEIC"), b"a").unwrap();
+        std::fs::write(year.join("IMG_1.MOV"), b"bb").unwrap();
+
+        let conn = db::open_in_memory().unwrap();
+        scan(&lib, &conn).unwrap();
+        let (dev, taken): (i64, i64) = conn
+            .query_row(
+                "SELECT device_id, taken_at FROM asset WHERE base_name='IMG_1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        db::set_integrity(
+            &conn,
+            dev,
+            "IMG_1",
+            taken,
+            crate::livephoto::INTEGRITY_MISMATCH,
+        )
+        .unwrap();
+
+        // 视频被删 → 在场形态从「两侧都在」变为「仅静态」，应覆盖为 3。
+        std::fs::remove_file(year.join("IMG_1.MOV")).unwrap();
+        scan(&lib, &conn).unwrap();
+
+        let integrity: i64 = conn
+            .query_row(
+                "SELECT integrity FROM asset WHERE base_name='IMG_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(integrity, crate::livephoto::INTEGRITY_STILL_ONLY);
+    }
 }

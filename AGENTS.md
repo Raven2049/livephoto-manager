@@ -13,7 +13,7 @@
 
 | 文档 | 位置 | 说明 |
 |---|---|---|
-| 设计文档 | `docs/superpowers/specs/2026-09-17-liveporter-design.md` | **唯一真相**。19 项决策、数据模型、管道设计、风险登记都在这里。动手前先读它 |
+| 设计文档 | `docs/superpowers/specs/2026-09-17-liveporter-design.md` | **唯一真相**。20 项决策、数据模型、管道设计、风险登记、发布后变更（附录 C）都在这里。动手前先读它 |
 | 计划 1 | `docs/superpowers/plans/2026-09-17-stage0-wpd-probe.md` | 阶段 0 只读探测程序（10 个任务，已完成） |
 | 计划 2 | `docs/superpowers/plans/2026-09-17-stage1-tauri-skeleton.md` | 阶段 1：Tauri 骨架 + `lpm://` 协议 + 虚拟滚动网格（10 个任务，**已完成**） |
 | 性能记录 | `docs/superpowers/notes/2026-09-17-grid-perf.md` | 阶段 1 网格性能实测（含两处必要修正） |
@@ -33,6 +33,7 @@
 | 打包实测 | `docs/superpowers/notes/2026-09-18-packaging-smoke.md` | 阶段 8 打包实测（no-bundle 产物、依赖、组装、启动） |
 | 计划 10 | `docs/superpowers/plans/2026-09-18-stage9-ui-redesign.md` | 阶段 9：界面改版（经典 HIG + 左右布局 + 跟随系统深浅）（**已实现**） |
 | 界面参考稿 | `docs/mockups/index.html` | 静态 HTML 参考稿 A/B/C/D（非构建产物） |
+| 加固记录 | `docs/superpowers/notes/2026-09-19-hardening.md` | 整体审查（HIG/安全/完整度）与发布后加固（2026-09-19） |
 
 ## 当前进度
 
@@ -50,12 +51,12 @@
   `content_id` 两侧一致、`integrity=0`；回填命令与诊断导出均实测通过
 - [x] **计划 8（阶段 7 浏览体验与 UI）编写并实现完成**：年/月/天多级时间线、搜索筛选（文字/类型/日期/完整性）、
   分页增量加载、多选导出（\`trash\` 回收站删除）、从库删除与孤儿缓存清理。自动化验证全绿
-  （liveporter 63 + probe 25 单测、clippy -D warnings、fmt、vue-tsc、vite build）。
+  （liveporter 81 可运行单测 + 9 个真机 ignored、probe 25、clippy -D warnings、fmt、vue-tsc、vite build）。
   GUI 经用户 dev 冒烟确认无明显问题；**逐项清单仍待完整复验**，见
   `docs/superpowers/notes/2026-09-18-browse-smoke.md`
-- [x] **计划 9（阶段 8 打包分发，绿色版）编写完成**：`tauri build --no-bundle` 组装脚本、
-  裁剪版 ffmpeg（15~25 MB）、DLL 依赖收集、README.txt、GitHub Release 流程。
-  文档见 `docs/superpowers/plans/2026-09-18-stage8-portable-packaging.md`，**尚待实现**
+- [x] **计划 9（阶段 8 打包分发，绿色版）编写并实现完成**：`tauri build --no-bundle` 组装脚本、
+  裁剪版 ffmpeg（≈12.5 MB）、DLL 依赖检查、README.txt、GitHub Release 流程。
+  文档见 `docs/superpowers/plans/2026-09-18-stage8-portable-packaging.md`（**已实现并验收**）。
 
 计划 9 的 7 项取舍已过审：裁剪 ffmpeg 本计划就做、捆绑 VC 运行时 DLL、首发版本 1.0.0、
 资源解析默认不改、动态 CRT、组装脚本用 PowerShell 5.1、最低 Windows 10 1809+。
@@ -108,6 +109,22 @@
 - 结论：**保留原生窗口边框与系统标题栏**。若只是想弱化标题栏观感，可走低风险折中：
   设置窗口主题/标题栏颜色（DWM），而不是自绘控件。
 
+### 整体审查与加固（2026-09-19）
+
+按「UI/UX 对照 HIG + 打包分发与安全 + 功能完整度」做了一轮整体审查，随后按优先级落地：
+
+- **可访问性（P0）**：导入开关改原生 `role=switch`（可 Tab/空格、有语义，`App.vue`）；小号文字由
+  `--label-3` 提升到 `--label-2`，并新增 `prefers-contrast: more` 覆盖（`app.css`）；错误 toast 不再
+  自动消失、点击关闭（`App.vue`）。依据 `accessibility.md:51/89/96`。
+- **安全收紧**：`lpm://` 白名单收窄为 `originals/thumbs/previews/larges/.lpm/view` + 媒体扩展名，
+  显式拒绝 `.lpm/index.db` 与 `diagnostics-*.txt`（`protocol.rs`）；`open_library` 拒绝盘根与系统目录
+  （`commands.rs`）。CSP 仍未配置（见「待定」）。
+- **integrity 持久化**：重扫不再抹掉已验证分类（1/2/5），仅在场形态变化时覆盖
+  （`db.rs::upsert_asset_preserving_taken_at`）；`校验标识` 新增 `assume_cloud` 参数，使 `integrity=5`
+  可达（`commands.rs::classify_library`；前端复用侧栏「原件可能不在手机」开关）。
+- 本轮同时修正了文档里的事实错误（「19 项决策」→ 20、计划 9 状态、测试数、新增目录）。
+  加固明细见 `docs/superpowers/notes/2026-09-19-hardening.md`。
+
 **有意取舍（不再改，除非有需求）**：
 - 搜索防抖 250ms（非 `search-fields.md` 的逐键搜索；本地 SQLite 查询足够快，防抖避免频繁重查）
 - 删除确认框「删除」仍用红色 destructive 样式（`alerts.md` 说主动删除可不标红；保留更稳妥）
@@ -154,13 +171,17 @@
 ## 待定 / 未验证 —— 不要臆断
 
 1. ~~许可证未定~~ → **已定 GPL-3.0-or-later**（设计文档附录 A 决策 6）。`LICENSE` 已建，`Cargo.toml`/`package.json` 的 `license` 字段已填。原因：捆绑 GPL 版 ffmpeg（H.264 编码依赖 `libx264`）。第三方声明见根 `THIRD_PARTY_NOTICES.md`。
-2. **iCloud「优化 iPhone 储存空间」的检测手段未确定** —— 设计文档 §6.4 只定了行为策略，检测方式需实测
+2. **iPhone「保留原件」/ iCloud 自动检测 —— 发布后待办，尚未实现**。
+   - 「保留原件」的信号**已确认**：设备端静态图全是 `.JPG`、无 `.HEIC`（即 iPhone 设为「传输到 Mac 或 PC = 自动」）。但代码里**没有任何自动检测**，只有空库引导里的一句静态提示与侧栏手动开关「原件可能不在手机」。
+   - iCloud「优化 iPhone 储存空间」的检测手段**仍未验证**（设计文档 §6.4 只定了行为策略）。**实现前不要臆断检测逻辑**，需真机实测。
 3. **WPD 并发流数量与传输速率的关系** —— **已实测（阶段 3）：并发无收益，维持 1**（见上文计划 4 遗留）
 4. **Windows 上访问 iPhone 相册只有 WPD 一条路**（底层是 iOS 的 PTP 实现）。换语言、换库都不会更快，因为大家都在调同一套 Windows 驱动栈。不要提议引入 `mtp-rs` 之类的第三方封装来"提升性能"——它官方只验证过 Android
+5. **CSP 尚未配置**（`src-tauri/tauri.conf.json` 的 `security.csp` 仍为 `null`）。加固时评估过：需同时放行 `lpm.localhost` / IPC / HMR，且必须 `tauri dev` 实机确认图片与视频仍能加载，因此**暂缓**。动手前先读 `notes/2026-09-19-hardening.md`。
+6. ~~发布打包治理~~ → **已完成（2026-09-19）**：`scripts/ffmpeg.sha256` 锁定裁剪版 `ffmpeg.exe`/`ffprobe.exe` 的 SHA-256，`package-portable.ps1` 打包前强校验（不一致即失败）；`deps-check.ps1` 新增 `-FailOnFound` 并接入打包（发现非系统 DLL 即失败）；`THIRD_PARTY_NOTICES.md` 补齐 libwebp 完整 BSD 文本与 libx264 声明。仅余 ffmpeg 二进制的**位级可复现**未解决——重建后需 `-RecordFfmpegHash` 重录哈希。
 
 ## 已定但尚未落地到计划
 
-1. **分发形态 = 绿色版（免安装）** —— 解压即用、免管理员、不写注册表；不追求单文件 exe。见设计文档 §11 与附录 A 决策 20。**后续的打包计划（对应设计 §13 第 9 步）必须落实：** `tauri build --no-bundle` 后组装 zip（裸 exe + 同目录 DLL + `resources/`）、ffmpeg sidecar 放入 `resources/` 并用 `BaseDirectory::Resource` 解析、WebView2 缺失说明、SmartScreen 未签名提示。
+1. **分发形态 = 绿色版（免安装）** —— 解压即用、免管理员、不写注册表；不追求单文件 exe。见设计文档 §11 与附录 A 决策 20。**已通过计划 9 落地并验收**（`scripts/package-portable.ps1`，产物与校验和见 `docs/superpowers/notes/2026-09-18-packaging-smoke.md`）。可选后续：NSIS 安装包、代码签名、锁定 ffmpeg 版本/哈希。
 
 ## 教训（踩过的坑，别再犯）
 

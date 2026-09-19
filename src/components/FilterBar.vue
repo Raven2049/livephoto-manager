@@ -182,7 +182,7 @@ const activeCount = computed(
 .pop-title {
   font-size: 11px;
   font-weight: 600;
-  color: var(--label-3);
+  color: var(--label-2);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 4px 2px 8px;

@@ -1,0 +1,14 @@
+# Expected SHA-256 of the trimmed FFmpeg binaries bundled by the portable build.
+# Verified by scripts/package-portable.ps1 before staging (fail on mismatch).
+#
+# These binaries are produced by scripts/build-ffmpeg.sh from FFmpeg 9.0.1
+# (MSYS2 MinGW-w64, --enable-gpl, libx264 + libwebp).
+# Rebuilds are not bit-reproducible, so after rebuilding ffmpeg regenerate this
+# file with:
+#
+#   powershell -ExecutionPolicy Bypass -File scripts/package-portable.ps1 `
+#       -RecordFfmpegHash -FfmpegDir <dir> -SkipBuild -SkipDepsCheck
+#
+# Format: <sha256>  <filename>
+B60224E97CCC27AFA98BF5158E5CF728C517954ADAB239152A8505860C0E7B97  ffmpeg.exe
+0BA6C32B6CC675185EA11D3A641643A175309CE43F2681B2710D4217226AC4A2  ffprobe.exe

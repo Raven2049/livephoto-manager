@@ -132,8 +132,13 @@ D:\LivePhotos\
 │   └── <hash>.webp                    512px WebP 缩略图
 ├── previews\
 │   └── <hash>.mp4                     480p H.264 预览片（按需生成）
+├── larges\                            ← 发布后新增：单列浏览用
+│   └── <hash>.webp                    2000px WebP 大图（按需生成）
 └── .lpm\
-    └── index.db                       SQLite 索引（隐藏目录）
+    ├── index.db                       SQLite 索引（隐藏目录）
+    └── view\                          ← 发布后新增：单张查看临时图
+        ├── <hash>.webp
+        └── <hash>-v.mp4               H.264 代理（按需生成）
 ```
 
 ### 设计要点
@@ -267,6 +272,11 @@ WPD 并发流数量（1 / 2 / 4）需实测确定：iOS 的 PTP 实现可能串�
 > **实测关联（2026-09-17，阶段 3）：** 曾怀疑低速是本节的 iCloud 优化存储，**已排除**
 > （用户确认该设置未开启）。真正原因是 iPhone「传输到 Mac 或 PC = 自动」的即席转码，
 > 见 §12 与 `notes/2026-09-17-import-smoke.md`。iCloud 检测**仍待实测**，但与低速无关。
+
+> **发布后状态（2026-09-19）：** 自动检测**未实现**，本版仍只有手动开关（即上述 v1 行为）。
+> 经整体审查，决定把「自动检测 + 自动阻止」记为发布后待办，而非本版交付：「保留原件」的
+> 信号（设备端静态图全 `.JPG`、无 `.HEIC`）已确认可用，但 iCloud 检测手段仍未验证。
+> 实现前不要臆断检测逻辑。详见 `notes/2026-09-19-hardening.md`。
 
 ---
 
@@ -464,8 +474,27 @@ WPD 并发流数量（1 / 2 / 4）需实测确定：iOS 的 PTP 实现可能串�
 
 ## 附录 B：待实测清单
 
-1. MTP 是否暴露实况照片的 `.MOV`
-2. 如何可靠检测「优化 iPhone 储存空间」已开启
+> 状态更新（2026-09-19）：1 / 3 / 4 / 5 已实测通过；2 仍未验证；6 / 7 为发布后新增待办。
+
+1. ~~MTP 是否暴露实况照片的 `.MOV`~~ **已实测：成立**（§2.4 / §2.5）
+2. 如何可靠检测「优化 iPhone 储存空间」已开启 —— **仍未验证**
 3. ~~WPD 并发流数量与传输速率的关系~~ **已实测（阶段 3）**：**维持并发 = 1**。根因（「自动」转码）修复、移除无谓的 250ms 释放延迟后：1 线程 **26 MB/s**（0 失败）、2 线程 21.9、4 线程 23.6（3 次 `ERROR_BUSY`）。**并发没有收益**；设备端事务是串行的。详见 `docs/superpowers/notes/2026-09-17-import-smoke.md`
-4. 从 HEIC / MOV 中读取 `ContentIdentifier` 的可行手段（`ffprobe` 是否足够）
-5. ffmpeg 裁剪构建的最小可行配置与体积
+4. ~~从 HEIC / MOV 中读取 `ContentIdentifier` 的可行手段（`ffprobe` 是否足够）~~ **已实测：可行**（字节扫描 + `ffprobe`，见 `docs/superpowers/notes/2026-09-18-content-id-probe.md`）
+5. ~~ffmpeg 裁剪构建的最小可行配置与体积~~ **已实测（阶段 8）**：`ffmpeg.exe` + `ffprobe.exe` ≈ 12.5 MB；HEIC 解码必须带 `xstack` 滤镜
+6. **「保留原件」自动检测** —— 信号已确认（设备端静态图全 `.JPG`、无 `.HEIC`），**尚未实现**（发布后待办）
+7. **CSP 与打包治理** —— 见 `docs/superpowers/notes/2026-09-19-hardening.md` 的「发布后待办」
+
+## 附录 C：发布后变更（2026-09-19）
+
+原始设计（2026-09-17）之后的实现变更，均已在本地验证（`cargo test` / `clippy` / `fmt` / `vue-tsc` / `vite build`）：
+
+| 项 | 变更 | 位置 |
+|---|---|---|
+| 安全 | `lpm://` 白名单收窄到 `originals/thumbs/previews/larges/.lpm/view` + 媒体扩展名；显式拒绝 `.lpm/index.db`、`diagnostics-*.txt` | `src-tauri/src/protocol.rs` |
+| 安全 | `open_library` 拒绝盘根与系统目录（`SystemRoot`/`ProgramFiles`/`ProgramData` 及其上级） | `src-tauri/src/commands.rs` |
+| 数据 | 重扫不再覆盖已验证的 `integrity`（1/2/5），仅在场形态变化时更新 | `src-tauri/src/db.rs`、`src-tauri/src/indexer.rs` |
+| 数据 | `校验标识` 支持 `assume_cloud`，`integrity=5` 可达 | `src-tauri/src/commands.rs`、`src/stores/library.ts`、`src/App.vue` |
+| 可访问性 | 导入开关改原生 `role=switch`；小号文字提升对比度 + `prefers-contrast: more`；错误 toast 常驻 | `src/App.vue`、`src/styles/app.css`、`src/components/FilterBar.vue` |
+| 缓存 | 新增 `larges/`（2000px WebP）与 `.lpm/view/`（查看临时图） | `src-tauri/src/library.rs`、`src-tauri/src/thumb.rs` |
+| 打包 | `scripts/ffmpeg.sha256` 锁定裁剪版 ffmpeg/ffprobe 哈希并在打包前强校验；`deps-check.ps1` 加 `-FailOnFound` 并接入打包；`THIRD_PARTY_NOTICES.md` 补 libwebp BSD 全文与 libx264 声明 | `scripts/`、`THIRD_PARTY_NOTICES.md` |
+| 未决 | `security.csp` 仍为 `null`（唯一遗留）；ffmpeg 二进制位级可复现未解决 | `src-tauri/tauri.conf.json`、`scripts/package-portable.ps1` |

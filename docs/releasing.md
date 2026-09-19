@@ -29,16 +29,23 @@ bash scripts/build-ffmpeg.sh <ffmpeg-源码目录> <输出目录>
   $env:LIVEPORTER_FFMPEG = "<输出目录>\bin\ffmpeg.exe"
   cargo test -p liveporter -- --ignored --nocapture
   ```
+- **重建后必须重新生成哈希清单**（否则打包会在校验处失败）：
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts/package-portable.ps1 `
+      -RecordFfmpegHash -FfmpegDir "<输出目录>\bin" -SkipBuild -SkipDepsCheck
+  ```
 
 ## 3. 检查组装的 ffmpeg
 
 确认使用的目录里同时有 `ffmpeg.exe` 与 `ffprobe.exe`，并记录体积。
+预期 SHA-256 记录在 `scripts/ffmpeg.sha256`，打包脚本会强校验；不一致会直接失败。
 
 ## 4. 依赖检查
 
+打包脚本已内置该门禁（等价于下面命令，`-FailOnFound` 时发现非系统 DLL 会以非 0 退出）：
+
 ```powershell
-cargo build --release -p liveporter   # 或直接进入第 5 步由脚本构建
-powershell -ExecutionPolicy Bypass -File scripts/deps-check.ps1 target/release/liveporter.exe
+powershell -ExecutionPolicy Bypass -File scripts/deps-check.ps1 target/release/liveporter.exe -FailOnFound
 ```
 
 - 当前预期输出：`OK: no non-system DLL dependency, nothing to bundle.`

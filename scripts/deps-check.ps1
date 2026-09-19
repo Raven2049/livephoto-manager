@@ -3,7 +3,9 @@
 #
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/deps-check.ps1 target/release/liveporter.exe
 param(
-    [Parameter(Mandatory = $true)][string]$Exe
+    [Parameter(Mandatory = $true)][string]$Exe,
+    # When set, exit non-zero if any non-system DLL is found (for release gating).
+    [switch]$FailOnFound
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,6 +62,7 @@ Write-Output ""
 if ($nonSystem) {
     Write-Output "Non-system DLLs (must ship in the zip):"
     $nonSystem | ForEach-Object { Write-Output "  $_" }
+    if ($FailOnFound) { exit 2 }
     exit 0
 }
 
