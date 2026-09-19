@@ -8,8 +8,6 @@ use tauri::http::header::{
 use tauri::http::status::StatusCode;
 use tauri::http::Response;
 
-use crate::library::{LARGES, META_DIR, ORIGINALS, PREVIEWS, THUMBS, VIEW_TMP};
-
 /// 常见图片/视频扩展名到 MIME。只做最小映射，够探针与网格用。
 pub fn mime_from_path(path: &Path) -> &'static str {
     match path
@@ -31,19 +29,6 @@ pub fn mime_from_path(path: &Path) -> &'static str {
     }
 }
 
-/// `lpm://` 只对外提供这些库内子目录（相对库根）下的媒体文件：
-/// 原始媒体目录 + 派生缩略图/预览/大图目录 + `.lpm/view` 临时查看图。
-/// 刻意排除 `.lpm/index.db`、`.lpm/diagnostics-*.txt` 等元数据。
-fn allowed_subdirs(root: &Path) -> [PathBuf; 5] {
-    [
-        root.join(ORIGINALS),
-        root.join(THUMBS),
-        root.join(PREVIEWS),
-        root.join(LARGES),
-        root.join(META_DIR).join(VIEW_TMP),
-    ]
-}
-
 /// 扩展名必须是静态图或视频（复用配对模块的定义，避免两份扩展名清单漂移）。
 fn media_ext_ok(path: &Path) -> bool {
     path.file_name()
@@ -51,24 +36,24 @@ fn media_ext_ok(path: &Path) -> bool {
         .is_some_and(|n| crate::pairing::is_still_name(n) || crate::pairing::is_movie_name(n))
 }
 
-/// 把请求路径解析成允许根内的真实路径。越界、非媒体扩展名、或落在禁止子目录返回 None。
+/// 把请求路径解析成允许根内的真实路径。越界、非媒体扩展名、或不存在返回 None。
+///
+/// 库根即照片目录，照片可在其任意子目录（也可在根），故允许根**递归**；文件名
+/// 仍必须是媒体类型，以挡住 `.lpm/index.db`、诊断报告等非媒体文件。
 pub fn resolve_allowed(raw_path: &str, allowed_root: &Path) -> Option<PathBuf> {
     let decoded = percent_encoding::percent_decode_str(raw_path).decode_utf8_lossy();
     // 去掉前导 '/'，兼容 Windows 盘符（/C:/...）
     let trimmed = decoded.trim_start_matches('/');
     let candidate = PathBuf::from(trimmed);
 
-    // 先按扩展名挡住数据库/诊断文本等非媒体文件。
     if !media_ext_ok(&candidate) {
         return None;
     }
 
-    // canonicalize 会消解 `..` 与符号链接，再做允许子目录的前缀判断，防止越界。
+    // canonicalize 会消解 `..` 与符号链接，再做根包含判断，防止越界。
     let canonical = std::fs::canonicalize(&candidate).ok()?;
-    let inside = allowed_subdirs(allowed_root)
-        .iter()
-        .any(|dir| std::fs::canonicalize(dir).is_ok_and(|d| canonical.starts_with(&d)));
-    if inside {
+    let root = std::fs::canonicalize(allowed_root).ok()?;
+    if canonical.starts_with(&root) {
         Some(canonical)
     } else {
         None
@@ -261,13 +246,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_rejects_media_at_library_root() {
+    fn resolve_accepts_media_at_library_root() {
         let root = temp_dir("lpm_proto_root_flat");
         let inside = root.join("a.jpg");
         std::fs::write(&inside, b"x").unwrap();
 
         let requested = format!("/{}", inside.to_string_lossy().replace('\\', "/"));
-        assert!(resolve_allowed(&requested, &root).is_none());
+        assert!(resolve_allowed(&requested, &root).is_some());
     }
 
     #[test]

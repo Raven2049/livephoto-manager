@@ -3,8 +3,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::livephoto::{INTEGRITY_STILL_ONLY, INTEGRITY_VIDEO_ONLY};
 use crate::pairing::{FileRef, PairedAsset};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
+/// schema v2：`asset` 以 `(dir, base_name)` 为业务键，照片属于「库内某个目录」而不是某台设备。
+/// `device` 表降级为导入来源记录（仅供诊断），不再参与 asset 键。
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS device (
   id            INTEGER PRIMARY KEY,
@@ -17,11 +19,13 @@ CREATE TABLE IF NOT EXISTS device (
 
 CREATE TABLE IF NOT EXISTS asset (
   id            INTEGER PRIMARY KEY,
-  device_id     INTEGER NOT NULL REFERENCES device(id),
+
+  dir           TEXT NOT NULL DEFAULT '',
+  base_name     TEXT NOT NULL,
 
   kind          INTEGER NOT NULL,
-  base_name     TEXT NOT NULL,
-  taken_at      INTEGER NOT NULL,
+  taken_at      INTEGER NOT NULL DEFAULT 0,
+  taken_src     INTEGER NOT NULL DEFAULT 0,
 
   still_path    TEXT,
   still_ext     TEXT,
@@ -34,6 +38,10 @@ CREATE TABLE IF NOT EXISTS asset (
   content_id    TEXT,
   integrity     INTEGER NOT NULL DEFAULT 0,
 
+  -- 导入来源（仅导入条目有；用于增量去重，避免平铺重名后重复导入）
+  src_name      TEXT,
+  src_serial    TEXT,
+
   status        INTEGER NOT NULL DEFAULT 0,
   error         TEXT,
 
@@ -45,7 +53,7 @@ CREATE TABLE IF NOT EXISTS asset (
   created_at    INTEGER,
   updated_at    INTEGER,
 
-  UNIQUE(device_id, base_name, taken_at)
+  UNIQUE(dir, base_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_asset_taken_at ON asset(taken_at DESC);
@@ -74,7 +82,9 @@ pub fn open_in_memory() -> rusqlite::Result<Connection> {
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if current < SCHEMA_VERSION {
+    if current != SCHEMA_VERSION {
+        // 只支持新结构：旧 schema（v1）直接重建，索引可由重扫恢复，原图不受影响。
+        conn.execute_batch("DROP TABLE IF EXISTS asset; DROP TABLE IF EXISTS device;")?;
         conn.execute_batch(SCHEMA)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
@@ -112,19 +122,6 @@ pub fn upsert_device(
     )
 }
 
-/// 按库内目录名找设备行。重扫（`indexer`）拿不到真实序列号，必须复用导入时
-/// 建立的设备，否则同一台手机会有两个 `device`，业务键含 `device_id` 会导致重复条目。
-/// 同一目录若有多个设备行，优先返回非 `unknown` 型号的那个（即真实导入建立的）。
-pub fn device_id_for_folder(conn: &Connection, folder_name: &str) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
-        "SELECT id FROM device WHERE folder_name = ?1
-         ORDER BY (model = 'unknown') ASC, id ASC LIMIT 1",
-        params![folder_name],
-        |r| r.get(0),
-    )
-    .optional()
-}
-
 fn split(f: &Option<FileRef>) -> (Option<String>, Option<String>, Option<i64>) {
     match f {
         Some(fr) => (
@@ -136,12 +133,13 @@ fn split(f: &Option<FileRef>) -> (Option<String>, Option<String>, Option<i64>) {
     }
 }
 
-/// 写入/更新一个逻辑条目。业务键是 (device_id, base_name, taken_at)。
-/// 本计划 `taken_at` 暂用 0（读不到拍摄时间，属计划 5），因此业务键实际退化为
-/// (device_id, base_name)。见计划文档「已知偏差 2」。
+/// 写入/更新一个逻辑条目。业务键是 `(dir, base_name)`。
+///
+/// 冲突时不触碰 `status / error / thumb_path / preview_path / content_id / created_at`，
+/// 以保留导入阶段写入的状态与派生路径。
 pub fn upsert_asset(
     conn: &Connection,
-    device_id: i64,
+    dir: &str,
     asset: &PairedAsset,
     taken_at: i64,
 ) -> rusqlite::Result<()> {
@@ -149,11 +147,12 @@ pub fn upsert_asset(
     let (movie_path, movie_ext, movie_size) = split(&asset.movie);
     conn.execute(
         "INSERT INTO asset
-           (device_id, kind, base_name, taken_at, still_path, still_ext, still_size,
+           (dir, base_name, kind, taken_at, still_path, still_ext, still_size,
             movie_path, movie_ext, movie_size, integrity, missing, created_at, updated_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12,?12)
-         ON CONFLICT(device_id, base_name, taken_at) DO UPDATE SET
+         ON CONFLICT(dir, base_name) DO UPDATE SET
            kind=excluded.kind,
+           taken_at=excluded.taken_at,
            still_path=excluded.still_path,
            still_ext=excluded.still_ext,
            still_size=excluded.still_size,
@@ -164,9 +163,9 @@ pub fn upsert_asset(
            missing=0,
            updated_at=excluded.updated_at",
         params![
-            device_id,
-            asset.kind,
+            dir,
             asset.base_name,
+            asset.kind,
             taken_at,
             still_path,
             still_ext,
@@ -181,21 +180,69 @@ pub fn upsert_asset(
     Ok(())
 }
 
-/// 重扫专用：同一 (device_id, base_name) 若已有条目，沿用其 taken_at；否则用 0。
-///
-/// 同时**保留**已验证的 integrity（1 不一致 / 2 残缺 / 5 疑似副本）：这些值由导入或
-/// 「校验标识」读 ContentIdentifier 得出，而重扫只按「文件是否在场」配对，直接覆盖会
-/// 把它们抹成 0/3/4。仅当在场形态变化时（例如视频被删）才用新的形态值覆盖。
-pub fn upsert_asset_preserving_taken_at(
+/// 导入专用：与 `upsert_asset` 相同，但额外记录来源（`src_serial`/`src_name`），
+/// 供下一次导入做增量去重——平铺后落盘主名可能被加后缀，不能拿落盘名去重。
+pub fn upsert_imported_asset(
     conn: &Connection,
-    device_id: i64,
+    dir: &str,
+    asset: &PairedAsset,
+    taken_at: i64,
+    src_serial: &str,
+    src_name: &str,
+) -> rusqlite::Result<()> {
+    let (still_path, still_ext, still_size) = split(&asset.still);
+    let (movie_path, movie_ext, movie_size) = split(&asset.movie);
+    conn.execute(
+        "INSERT INTO asset
+           (dir, base_name, kind, taken_at, still_path, still_ext, still_size,
+            movie_path, movie_ext, movie_size, integrity, src_name, src_serial, missing, created_at, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,0,?14,?14)
+         ON CONFLICT(dir, base_name) DO UPDATE SET
+           kind=excluded.kind,
+           taken_at=excluded.taken_at,
+           still_path=excluded.still_path,
+           still_ext=excluded.still_ext,
+           still_size=excluded.still_size,
+           movie_path=excluded.movie_path,
+           movie_ext=excluded.movie_ext,
+           movie_size=excluded.movie_size,
+           integrity=excluded.integrity,
+           src_name=excluded.src_name,
+           src_serial=excluded.src_serial,
+           missing=0,
+           updated_at=excluded.updated_at",
+        params![
+            dir,
+            asset.base_name,
+            asset.kind,
+            taken_at,
+            still_path,
+            still_ext,
+            still_size,
+            movie_path,
+            movie_ext,
+            movie_size,
+            asset.integrity,
+            src_name,
+            src_serial,
+            now_epoch(),
+        ],
+    )?;
+    Ok(())
+}
+
+/// 重扫（`indexer`）专用：同一 `(dir, base_name)` 若已有条目，沿用其 `taken_at`；
+/// 并且**保留**已验证的 integrity（1 不一致 / 2 残缺 / 5 疑似副本）——重扫只按
+/// 「文件是否在场」配对，直接覆盖会把它们抹成 0/3/4。仅当在场形态变化时才更新。
+pub fn upsert_scanned_asset(
+    conn: &Connection,
+    dir: &str,
     asset: &PairedAsset,
 ) -> rusqlite::Result<()> {
     let existing: Option<(i64, i64)> = conn
         .query_row(
-            "SELECT taken_at, integrity FROM asset WHERE device_id = ?1 AND base_name = ?2
-             ORDER BY taken_at DESC LIMIT 1",
-            params![device_id, asset.base_name],
+            "SELECT taken_at, integrity FROM asset WHERE dir = ?1 AND base_name = ?2",
+            params![dir, asset.base_name],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
@@ -203,14 +250,15 @@ pub fn upsert_asset_preserving_taken_at(
         Some((t, i)) => (t, Some(i)),
         None => (0, None),
     };
-    // 形态不变 → 保留旧分类；形态变了 → 用新的在场值。
     let keep =
         old_integrity.is_some_and(|old| presence_shape(old) == presence_shape(asset.integrity));
-    upsert_asset(conn, device_id, asset, taken_at)?;
-    if let Some(old) = old_integrity.filter(|old| keep && *old != asset.integrity) {
-        set_integrity(conn, device_id, &asset.base_name, taken_at, old)?;
+    let mut merged = asset.clone();
+    if keep {
+        if let Some(old) = old_integrity {
+            merged.integrity = old;
+        }
     }
-    Ok(())
+    upsert_asset(conn, dir, &merged, taken_at)
 }
 
 /// integrity 的「在场形态」：3 = 仅静态，4 = 仅视频，其余（0/1/2/5）都建立在两侧在场之上。
@@ -221,29 +269,25 @@ fn presence_shape(integrity: i64) -> i64 {
     }
 }
 
-/// 扫描前把某设备下所有条目置 missing=1；命中的条目会在 upsert 时清回 0。
+/// 扫描前把全部条目置 `missing=1`；命中的条目会在 upsert 时清回 0。
 /// 必须在 upsert 之前调用，否则会误标。
-pub fn mark_device_missing(conn: &Connection, device_id: i64) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE asset SET missing = 1 WHERE device_id = ?1",
-        params![device_id],
-    )?;
+pub fn mark_all_missing(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute("UPDATE asset SET missing = 1", [])?;
     Ok(())
 }
 
 /// 更新条目的导入状态与错误信息。
 pub fn set_asset_status(
     conn: &Connection,
-    device_id: i64,
+    dir: &str,
     base_name: &str,
-    taken_at: i64,
     status: i64,
     error: Option<&str>,
 ) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE asset SET status=?1, error=?2, updated_at=?3
-         WHERE device_id=?4 AND base_name=?5 AND taken_at=?6",
-        params![status, error, now_epoch(), device_id, base_name, taken_at],
+         WHERE dir=?4 AND base_name=?5",
+        params![status, error, now_epoch(), dir, base_name],
     )?;
     Ok(())
 }
@@ -251,15 +295,14 @@ pub fn set_asset_status(
 /// 写入缩略图路径。
 pub fn set_thumb_path(
     conn: &Connection,
-    device_id: i64,
+    dir: &str,
     base_name: &str,
-    taken_at: i64,
     thumb_path: &str,
 ) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE asset SET thumb_path=?1, updated_at=?2
-         WHERE device_id=?3 AND base_name=?4 AND taken_at=?5",
-        params![thumb_path, now_epoch(), device_id, base_name, taken_at],
+         WHERE dir=?3 AND base_name=?4",
+        params![thumb_path, now_epoch(), dir, base_name],
     )?;
     Ok(())
 }
@@ -267,15 +310,14 @@ pub fn set_thumb_path(
 /// 写入 ContentIdentifier（静态图优先，其次视频）。
 pub fn set_content_id(
     conn: &Connection,
-    device_id: i64,
+    dir: &str,
     base_name: &str,
-    taken_at: i64,
     content_id: Option<&str>,
 ) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE asset SET content_id=?1, updated_at=?2
-         WHERE device_id=?3 AND base_name=?4 AND taken_at=?5",
-        params![content_id, now_epoch(), device_id, base_name, taken_at],
+         WHERE dir=?3 AND base_name=?4",
+        params![content_id, now_epoch(), dir, base_name],
     )?;
     Ok(())
 }
@@ -283,15 +325,14 @@ pub fn set_content_id(
 /// 写入完整性分类。
 pub fn set_integrity(
     conn: &Connection,
-    device_id: i64,
+    dir: &str,
     base_name: &str,
-    taken_at: i64,
     integrity: i64,
 ) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE asset SET integrity=?1, updated_at=?2
-         WHERE device_id=?3 AND base_name=?4 AND taken_at=?5",
-        params![integrity, now_epoch(), device_id, base_name, taken_at],
+         WHERE dir=?3 AND base_name=?4",
+        params![integrity, now_epoch(), dir, base_name],
     )?;
     Ok(())
 }
@@ -320,20 +361,25 @@ pub fn set_preview_path(
     Ok(())
 }
 
-/// 已「完成」条目的大小映射：`(base_name, taken_at) -> (still_size, movie_size)`。
-pub type ExistingSizes = std::collections::HashMap<(String, i64), (Option<u64>, Option<u64>)>;
+/// 已导入条目的大小映射：`(src_serial, src_name) -> (still_size, movie_size)`。
+pub type ImportedSizes = std::collections::HashMap<(String, String), (Option<u64>, Option<u64>)>;
 
-/// 已「完成」条目的大小，供增量比对。
+/// 已导入条目的大小，供增量去重。
 ///
-/// **只包含 status >= 1（copied 及以上）的条目**：`pending`(0)/`failed`(4) 不在此列，
-/// 因而会被 `diff_tasks` 视为"仍需传输"，这正是断点续传需要的语义。
-pub fn existing_sizes(conn: &Connection) -> rusqlite::Result<ExistingSizes> {
+/// 键用导入来源 `(src_serial, src_name)` 而非落盘名：平铺后落盘名可能被加后缀，
+/// 用落盘名会导致每次导入都重复。只含 `status >= 1`（copied 及以上）的导入条目；
+/// `pending`(0)/`failed`(4) 会被视为"仍需传输"，正是断点续传需要的语义。
+pub fn imported_sizes(conn: &Connection) -> rusqlite::Result<ImportedSizes> {
     let mut stmt = conn.prepare(
-        "SELECT base_name, taken_at, still_size, movie_size FROM asset WHERE status >= 1",
+        "SELECT src_serial, src_name, still_size, movie_size FROM asset
+         WHERE src_name IS NOT NULL AND status >= 1",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok((
-            (r.get::<_, String>(0)?, r.get::<_, i64>(1)?),
+            (
+                r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                r.get::<_, String>(1)?,
+            ),
             (
                 r.get::<_, Option<i64>>(2)?.map(|v| v as u64),
                 r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
@@ -345,16 +391,15 @@ pub fn existing_sizes(conn: &Connection) -> rusqlite::Result<ExistingSizes> {
 
 #[derive(Debug, Clone)]
 pub struct ThumbJob {
-    pub device_id: i64,
+    pub dir: String,
     pub base_name: String,
-    pub taken_at: i64,
     pub source_path: String,
 }
 
 /// 列出「缺少缩略图」的条目（文件存在、有源路径）。
 pub fn assets_missing_thumbs(conn: &Connection) -> rusqlite::Result<Vec<ThumbJob>> {
     let mut stmt = conn.prepare(
-        "SELECT device_id, base_name, taken_at, coalesce(still_path, movie_path)
+        "SELECT dir, base_name, coalesce(still_path, movie_path)
          FROM asset
          WHERE missing = 0
            AND (thumb_path IS NULL OR thumb_path = '')
@@ -362,10 +407,9 @@ pub fn assets_missing_thumbs(conn: &Connection) -> rusqlite::Result<Vec<ThumbJob
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(ThumbJob {
-            device_id: r.get(0)?,
+            dir: r.get(0)?,
             base_name: r.get(1)?,
-            taken_at: r.get(2)?,
-            source_path: r.get(3)?,
+            source_path: r.get(2)?,
         })
     })?;
     rows.collect()
@@ -374,9 +418,8 @@ pub fn assets_missing_thumbs(conn: &Connection) -> rusqlite::Result<Vec<ThumbJob
 /// 列出所有需要重算 integrity 的条目（文件未标记缺失）。
 #[derive(Debug, Clone)]
 pub struct ClassifyJob {
-    pub device_id: i64,
+    pub dir: String,
     pub base_name: String,
-    pub taken_at: i64,
     pub still_path: Option<String>,
     pub movie_path: Option<String>,
     pub still_size: Option<i64>,
@@ -384,17 +427,16 @@ pub struct ClassifyJob {
 
 pub fn assets_for_classify(conn: &Connection) -> rusqlite::Result<Vec<ClassifyJob>> {
     let mut stmt = conn.prepare(
-        "SELECT device_id, base_name, taken_at, still_path, movie_path, still_size
+        "SELECT dir, base_name, still_path, movie_path, still_size
          FROM asset WHERE missing = 0",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(ClassifyJob {
-            device_id: r.get(0)?,
+            dir: r.get(0)?,
             base_name: r.get(1)?,
-            taken_at: r.get(2)?,
-            still_path: r.get(3)?,
-            movie_path: r.get(4)?,
-            still_size: r.get(5)?,
+            still_path: r.get(2)?,
+            movie_path: r.get(3)?,
+            still_size: r.get(4)?,
         })
     })?;
     rows.collect()
@@ -672,7 +714,8 @@ mod tests {
     use super::*;
     use crate::pairing::{INTEGRITY_STILL_ONLY, KIND_LIVE, KIND_PHOTO, KIND_VIDEO};
 
-    fn seed(conn: &Connection, dev: i64, name: &str, taken_at: i64, kind: i64, integrity: i64) {
+    /// 造一个条目：`dir` 为空（库根），文件名就用主名。
+    fn seed(conn: &Connection, name: &str, taken_at: i64, kind: i64, integrity: i64) {
         let a = PairedAsset {
             base_name: name.into(),
             kind,
@@ -692,7 +735,21 @@ mod tests {
                 None
             },
         };
-        upsert_asset(conn, dev, &a, taken_at).unwrap();
+        upsert_asset(conn, "", &a, taken_at).unwrap();
+    }
+
+    fn sample_asset(name: &str) -> PairedAsset {
+        PairedAsset {
+            base_name: name.into(),
+            kind: KIND_PHOTO,
+            integrity: INTEGRITY_STILL_ONLY,
+            still: Some(FileRef {
+                path: format!("{name}.JPG"),
+                ext: "jpg".into(),
+                size: 42,
+            }),
+            movie: None,
+        }
     }
 
     #[test]
@@ -703,10 +760,9 @@ mod tests {
     #[test]
     fn filter_by_kind_integrity_and_date() {
         let conn = open_in_memory().unwrap();
-        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
-        seed(&conn, dev, "IMG_1", 100, KIND_LIVE, 0);
-        seed(&conn, dev, "IMG_2", 200, KIND_PHOTO, 3);
-        seed(&conn, dev, "IMG_3", 300, KIND_VIDEO, 4);
+        seed(&conn, "IMG_1", 100, KIND_LIVE, 0);
+        seed(&conn, "IMG_2", 200, KIND_PHOTO, 3);
+        seed(&conn, "IMG_3", 300, KIND_VIDEO, 4);
 
         let f = AssetFilter {
             kind: Some(KIND_PHOTO),
@@ -735,9 +791,8 @@ mod tests {
     #[test]
     fn filter_text_matches_substring_and_escapes() {
         let conn = open_in_memory().unwrap();
-        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
-        seed(&conn, dev, "IMG_0001", 1, KIND_PHOTO, 3);
-        seed(&conn, dev, "IMG_1002", 2, KIND_PHOTO, 3);
+        seed(&conn, "IMG_0001", 1, KIND_PHOTO, 3);
+        seed(&conn, "IMG_1002", 2, KIND_PHOTO, 3);
 
         let f = AssetFilter {
             text: Some("IMG_0".into()),
@@ -751,10 +806,9 @@ mod tests {
     #[test]
     fn page_orders_by_taken_at_desc_then_id_desc() {
         let conn = open_in_memory().unwrap();
-        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
-        seed(&conn, dev, "OLD", 100, KIND_PHOTO, 3);
-        seed(&conn, dev, "NEW", 300, KIND_PHOTO, 3);
-        seed(&conn, dev, "MID", 200, KIND_PHOTO, 3);
+        seed(&conn, "OLD", 100, KIND_PHOTO, 3);
+        seed(&conn, "NEW", 300, KIND_PHOTO, 3);
+        seed(&conn, "MID", 200, KIND_PHOTO, 3);
 
         let rows = page_assets_filtered(&conn, &AssetFilter::default(), 0, 10).unwrap();
         let names: Vec<_> = rows.iter().map(|r| r.base_name.as_str()).collect();
@@ -765,9 +819,8 @@ mod tests {
     #[test]
     fn count_and_ids_match_the_filtered_page() {
         let conn = open_in_memory().unwrap();
-        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
-        seed(&conn, dev, "A", 1, KIND_PHOTO, 3);
-        seed(&conn, dev, "B", 2, KIND_LIVE, 0);
+        seed(&conn, "A", 1, KIND_PHOTO, 3);
+        seed(&conn, "B", 2, KIND_LIVE, 0);
 
         let f = AssetFilter {
             integrity: Some(vec![0]),
@@ -797,6 +850,32 @@ mod tests {
     }
 
     #[test]
+    fn migrate_rebuilds_v1_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        // 模拟 v1：老 asset 表 + user_version=1。
+        conn.execute_batch(
+            "CREATE TABLE asset (id INTEGER PRIMARY KEY, device_id INTEGER NOT NULL, base_name TEXT NOT NULL,
+               taken_at INTEGER NOT NULL, UNIQUE(device_id, base_name, taken_at));
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        // 新列 dir 存在（旧表已重建）。
+        let has_dir: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('asset') WHERE name='dir'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_dir, 1);
+    }
+
+    #[test]
     fn migrate_is_idempotent() {
         let conn = open_in_memory().unwrap();
         migrate(&conn).unwrap();
@@ -822,7 +901,6 @@ mod tests {
     fn asset_movie_path_and_preview_path() {
         use crate::pairing::{FileRef, PairedAsset, KIND_LIVE};
         let conn = open_in_memory().unwrap();
-        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
 
         let a = PairedAsset {
             base_name: "IMG_1".into(),
@@ -839,7 +917,7 @@ mod tests {
                 size: 2,
             }),
         };
-        upsert_asset(&conn, dev, &a, 100).unwrap();
+        upsert_asset(&conn, "", &a, 100).unwrap();
         let id: i64 = conn
             .query_row("SELECT id FROM asset", [], |r| r.get(0))
             .unwrap();
@@ -848,7 +926,6 @@ mod tests {
             asset_movie_path(&conn, id).unwrap().as_deref(),
             Some("m.mov")
         );
-        // 不存在的 id → None
         assert!(asset_movie_path(&conn, 9999).unwrap().is_none());
 
         set_preview_path(&conn, id, "p.mp4").unwrap();
@@ -859,48 +936,28 @@ mod tests {
     }
 
     #[test]
-    fn asset_unique_key_rejects_true_duplicate() {
+    fn unique_key_is_dir_plus_base_name() {
         let conn = open_in_memory().unwrap();
-        conn.execute(
-            "INSERT INTO device (serial, model, folder_name) VALUES (?1, ?2, ?3)",
-            params!["SN1", "iPhone15Pro", "iPhone15Pro-3F9A2C"],
-        )
-        .unwrap();
+        upsert_asset(&conn, "", &sample_asset("IMG_0001"), 1).unwrap();
+        // 同目录同主名 → 更新同一行。
+        upsert_asset(&conn, "", &sample_asset("IMG_0001"), 1).unwrap();
+        // 不同目录同名 → 允许，各自独立。
+        upsert_asset(&conn, "MI10PRO/2020-08", &sample_asset("IMG_0001"), 1).unwrap();
 
-        let insert = |conn: &Connection| {
-            conn.execute(
-                "INSERT INTO asset (device_id, kind, base_name, taken_at, still_path)
-                 VALUES (1, 3, 'IMG_0001', 1700000000, 'originals/x/2024/IMG_0001.HEIC')",
-                [],
-            )
-        };
-        insert(&conn).unwrap();
-        assert!(
-            insert(&conn).is_err(),
-            "同一 (device,base,taken_at) 应被唯一约束挡下"
-        );
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM asset", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2, "同名不同目录应各占一行");
     }
 
     #[test]
     fn upsert_asset_is_idempotent_and_marks_missing_zero() {
         let conn = open_in_memory().unwrap();
-        let dev = upsert_device(&conn, "SN1", "iPhone15Pro", None, "iPhone15Pro-3F9A2C").unwrap();
-
-        let asset = PairedAsset {
-            base_name: "IMG_0001".into(),
-            kind: KIND_PHOTO,
-            integrity: INTEGRITY_STILL_ONLY,
-            still: Some(FileRef {
-                path: "originals/dev/2024/IMG_0001.JPG".into(),
-                ext: "jpg".into(),
-                size: 42,
-            }),
-            movie: None,
-        };
+        let asset = sample_asset("IMG_0001");
 
         conn.execute("UPDATE asset SET missing=1", []).unwrap();
-        upsert_asset(&conn, dev, &asset, 0).unwrap();
-        upsert_asset(&conn, dev, &asset, 0).unwrap();
+        upsert_asset(&conn, "", &asset, 0).unwrap();
+        upsert_asset(&conn, "", &asset, 0).unwrap();
 
         let (n, missing): (i64, i64) = conn
             .query_row("SELECT count(*), max(missing) FROM asset", [], |r| {
@@ -912,22 +969,10 @@ mod tests {
     }
 
     #[test]
-    fn mark_device_missing_flags_all_until_upserted() {
+    fn mark_all_missing_flags_all_until_upserted() {
         let conn = open_in_memory().unwrap();
-        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
-        let a = PairedAsset {
-            base_name: "IMG_1".into(),
-            kind: KIND_PHOTO,
-            integrity: INTEGRITY_STILL_ONLY,
-            still: Some(FileRef {
-                path: "x".into(),
-                ext: "jpg".into(),
-                size: 1,
-            }),
-            movie: None,
-        };
-        upsert_asset(&conn, dev, &a, 0).unwrap();
-        mark_device_missing(&conn, dev).unwrap();
+        upsert_asset(&conn, "", &sample_asset("IMG_1"), 0).unwrap();
+        mark_all_missing(&conn).unwrap();
         let missing: i64 = conn
             .query_row("SELECT missing FROM asset", [], |r| r.get(0))
             .unwrap();
@@ -937,7 +982,6 @@ mod tests {
     #[test]
     fn page_and_stats_work() {
         let conn = open_in_memory().unwrap();
-        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
         for (i, name) in ["A", "B", "C"].iter().enumerate() {
             let a = PairedAsset {
                 base_name: (*name).into(),
@@ -958,7 +1002,7 @@ mod tests {
                     None
                 },
             };
-            upsert_asset(&conn, dev, &a, 0).unwrap();
+            upsert_asset(&conn, "", &a, 0).unwrap();
         }
 
         let page = page_assets_filtered(&conn, &AssetFilter::default(), 1, 1).unwrap();
@@ -974,21 +1018,10 @@ mod tests {
     #[test]
     fn rescan_preserves_imported_taken_at() {
         let conn = open_in_memory().unwrap();
-        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
-        seed(&conn, dev, "IMG_1", 12345, KIND_PHOTO, 3);
+        seed(&conn, "IMG_1", 12345, KIND_PHOTO, 3);
 
-        let a = PairedAsset {
-            base_name: "IMG_1".into(),
-            kind: KIND_PHOTO,
-            integrity: INTEGRITY_STILL_ONLY,
-            still: Some(FileRef {
-                path: "IMG_1.JPG".into(),
-                ext: "jpg".into(),
-                size: 10,
-            }),
-            movie: None,
-        };
-        upsert_asset_preserving_taken_at(&conn, dev, &a).unwrap();
+        let a = sample_asset("IMG_1");
+        upsert_scanned_asset(&conn, "", &a).unwrap();
 
         let n: i64 = conn
             .query_row("SELECT count(*) FROM asset", [], |r| r.get(0))
@@ -1001,11 +1034,58 @@ mod tests {
     }
 
     #[test]
+    fn rescan_preserves_validated_integrity_but_updates_on_shape_change() {
+        let conn = open_in_memory().unwrap();
+        // 两侧都在的实况，导入后分类为「不一致」。
+        let live = PairedAsset {
+            base_name: "IMG_1".into(),
+            kind: KIND_LIVE,
+            integrity: 0,
+            still: Some(FileRef {
+                path: "IMG_1.HEIC".into(),
+                ext: "heic".into(),
+                size: 1,
+            }),
+            movie: Some(FileRef {
+                path: "IMG_1.MOV".into(),
+                ext: "mov".into(),
+                size: 1,
+            }),
+        };
+        upsert_asset(&conn, "", &live, 0).unwrap();
+        set_integrity(&conn, "", "IMG_1", 1).unwrap();
+
+        // 重扫：在场形态不变 → 保留 1。
+        upsert_scanned_asset(&conn, "", &live).unwrap();
+        let i: i64 = conn
+            .query_row("SELECT integrity FROM asset", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(i, 1);
+
+        // 视频被删 → 形态变化 → 变 3（仅静态）。
+        let still_only = PairedAsset {
+            base_name: "IMG_1".into(),
+            kind: KIND_PHOTO,
+            integrity: INTEGRITY_STILL_ONLY,
+            still: Some(FileRef {
+                path: "IMG_1.HEIC".into(),
+                ext: "heic".into(),
+                size: 1,
+            }),
+            movie: None,
+        };
+        upsert_scanned_asset(&conn, "", &still_only).unwrap();
+        let i: i64 = conn
+            .query_row("SELECT integrity FROM asset", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(i, INTEGRITY_STILL_ONLY);
+    }
+
+    #[test]
     fn assets_by_ids_returns_matching_rows_and_empty_for_empty_input() {
         let conn = open_in_memory().unwrap();
-        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
-        seed(&conn, dev, "A", 1, KIND_LIVE, 0);
-        seed(&conn, dev, "B", 2, KIND_PHOTO, 3);
+        seed(&conn, "A", 1, KIND_LIVE, 0);
+        seed(&conn, "B", 2, KIND_PHOTO, 3);
 
         assert!(assets_by_ids(&conn, &[]).unwrap().is_empty());
 
@@ -1020,9 +1100,8 @@ mod tests {
     #[test]
     fn delete_assets_removes_rows_and_counts_cache_refs() {
         let conn = open_in_memory().unwrap();
-        let dev = upsert_device(&conn, "SN1", "m", None, "d").unwrap();
-        seed(&conn, dev, "A", 1, KIND_PHOTO, 3);
-        seed(&conn, dev, "B", 2, KIND_PHOTO, 3);
+        seed(&conn, "A", 1, KIND_PHOTO, 3);
+        seed(&conn, "B", 2, KIND_PHOTO, 3);
         conn.execute(
             "UPDATE asset SET thumb_path='thumbs/x.webp', preview_path='previews/y.mp4'",
             [],

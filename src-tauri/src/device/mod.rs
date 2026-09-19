@@ -136,22 +136,6 @@ fn days_from_civil(y: i32, m: i32, d: i32) -> i64 {
     era * 146097 + doe - 719468
 }
 
-/// 由 epoch 秒取 UTC 年份（差一天的边界对本用途可接受，不引 chrono）。
-pub fn year_of(epoch: i64) -> i32 {
-    let mut days = epoch.div_euclid(86400);
-    let mut year = 1970i64;
-    loop {
-        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-        let len = if leap { 366 } else { 365 };
-        if days < len {
-            break;
-        }
-        days -= len;
-        year += 1;
-    }
-    year as i32
-}
-
 pub struct WpdDevice {
     content: IPortableDeviceContent,
     properties: IPortableDeviceProperties,
@@ -560,15 +544,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn year_of_epoch() {
-        assert_eq!(year_of(0), 1970);
-        assert_eq!(year_of(1_700_000_000), 2023);
-    }
-
-    #[test]
     fn parses_wpd_date_string() {
         let e = parse_date_string("2026/04/30:19:42:06.000").unwrap();
-        assert_eq!(year_of(e), 2026);
         let expected = days_from_civil(2026, 4, 30) * 86400 + 19 * 3600 + 42 * 60 + 6;
         assert_eq!(e, expected);
     }

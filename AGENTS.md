@@ -34,6 +34,7 @@
 | 计划 10 | `docs/superpowers/plans/2026-09-18-stage9-ui-redesign.md` | 阶段 9：界面改版（经典 HIG + 左右布局 + 跟随系统深浅）（**已实现**） |
 | 界面参考稿 | `docs/mockups/index.html` | 静态 HTML 参考稿 A/B/C/D（非构建产物） |
 | 加固记录 | `docs/superpowers/notes/2026-09-19-hardening.md` | 整体审查（HIG/安全/完整度）与发布后加固（2026-09-19） |
+| 库重构设计 | `docs/superpowers/specs/2026-09-19-flat-library-refactor.md` | 平铺库重构：决策 21–28、schema v2、分期（重修 §4/§5/§6 与决策 2/9） |
 
 ## 当前进度
 
@@ -124,6 +125,23 @@
   可达（`commands.rs::classify_library`；前端复用侧栏「原件可能不在手机」开关）。
 - 本轮同时修正了文档里的事实错误（「19 项决策」→ 20、计划 9 状态、测试数、新增目录）。
   加固明细见 `docs/superpowers/notes/2026-09-19-hardening.md`。
+
+### 平铺库重构（2026-09-19，Phase 1–3 已实现）
+
+库模型重构：用户选的目录**就是**照片目录，取消 `originals/`；派生数据收进隐藏 `.lpm/`；
+递归扫描、导入平铺、数据键改 `(dir, base_name)`。设计与决策见
+`docs/superpowers/specs/2026-09-19-flat-library-refactor.md`。
+
+- **Phase 1（已完成）**：`library.rs` 只建隐藏 `.lpm/`（含 `thumbs/previews/larges/view` 与
+  `index.db`），设 Windows 隐藏属性（`SetFileAttributesW`）；`protocol.rs` 白名单改为**库根递归** + 媒体扩展名。
+- **Phase 2（已完成）**：`db.rs` schema v2（`dir` + `taken_at` + `taken_src` + `src_name/src_serial`，
+  `UNIQUE(dir, base_name)`；旧 v1 直接重建）；`indexer.rs` 递归扫描、跳过 `.lpm`、同目录配对、按 `dir` 归属。
+- **Phase 3（已完成）**：导入平铺到库根；数据库键用**落盘主名**，设备原名存 `src_name`/`src_serial`
+  用于增量去重（`imported_sizes` + `diff_tasks(..., serial)`）；删除确认阈值改为 ≥2。
+- **验证**：`cargo test` 80 passed / 9 ignored、`clippy -D warnings`、`fmt --check`、`npm run build` 全绿。
+  **尚未**在真实相册目录（如 `D:\图片\Pictures\MI10PRO`）上跑 GUI 实测。
+- **Phase 4/5（未做）**：从文件读拍摄时间（EXIF/ffprobe，需实测）；文档收尾。
+- 注意：旧库的 `iPhone\thumbs` 等派生目录会被当普通照片扫入（只跳过 `.lpm`），需手动清理旧库。
 
 **有意取舍（不再改，除非有需求）**：
 - 搜索防抖 250ms（非 `search-fields.md` 的逐键搜索；本地 SQLite 查询足够快，防抖避免频繁重查）

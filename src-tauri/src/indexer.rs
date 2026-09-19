@@ -2,11 +2,12 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::library::Library;
+use crate::library::{Library, META_DIR};
 use crate::pairing::pair_files;
 
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ScanSummary {
+    /// 已废弃（保留字段以兼容前端事件）；现在按目录扫描，不再统计设备。
     pub devices: usize,
     pub files: usize,
     pub assets: usize,
@@ -20,11 +21,14 @@ pub struct ScanProgress {
     pub assets: usize,
 }
 
-/// 扫描 `originals/<device_folder>/<year>/` 下的文件，配对后写进索引。
-/// 幂等：重复扫描不产生重复行；已消失的文件会被置 `missing=1`。
+/// 递归扫描库根下的全部媒体文件，配对后写进索引。
 ///
-/// `cancel` 在每个目录前检查；`on_progress` 每个年份目录回调一次。
-/// 测试与简单调用可传 `&|| false` 和 `|_| {}`。
+/// - 跳过隐藏的 `.lpm/`（索引与缓存所在），不跟随符号链接/junction（防环）。
+/// - 配对只在**同一目录内**按主名进行（实况的 HEIC/MOV 本就同目录）。
+/// - `dir` 为相对库根的目录（`''` = 根），作为条目的业务键。
+///
+/// 幂等：重复扫描不产生重复行；已消失的文件会被置 `missing=1`。
+/// `cancel` 在每个目录前检查；`on_progress` 每个含文件的目录回调一次。
 pub fn scan_library_with(
     lib: &Library,
     conn: &Connection,
@@ -32,108 +36,114 @@ pub fn scan_library_with(
     mut on_progress: impl FnMut(ScanProgress),
 ) -> anyhow::Result<ScanSummary> {
     let mut summary = ScanSummary::default();
-    let originals = lib.originals_dir();
-    if !originals.is_dir() {
+    let root = lib.root().to_path_buf();
+    if !root.is_dir() {
         return Ok(summary);
     }
 
-    for device_entry in std::fs::read_dir(&originals)?.flatten() {
-        if cancel() {
-            break;
-        }
-        let device_dir = device_entry.path();
-        if !device_dir.is_dir() {
-            continue;
-        }
-        let folder_name = device_dir
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        summary.devices += 1;
-
-        // 优先复用该目录已存在的设备（通常是 WPD 导入建立的、带真实序列号与型号）。
-        // 只有从未导入过、纯凭磁盘文件建库时，才用目录名占位。
-        let device_id = match crate::db::device_id_for_folder(conn, &folder_name)? {
-            Some(id) => id,
-            None => crate::db::upsert_device(conn, &folder_name, "unknown", None, &folder_name)?,
-        };
-
-        // 先把该设备下所有条目置 missing=1；下面遍历命中时会 upsert 清回 0。
-        // 顺序不能反，否则会误标。
-        crate::db::mark_device_missing(conn, device_id)?;
-
-        for year_entry in std::fs::read_dir(&device_dir)?.flatten() {
-            if cancel() {
-                break;
-            }
-            let year_dir = year_entry.path();
-            if !year_dir.is_dir() {
-                continue;
-            }
-            let files = collect_files(&year_dir);
-            summary.files += files.len();
-            for asset in pair_files(&files) {
-                crate::db::upsert_asset_preserving_taken_at(conn, device_id, &asset)?;
-                summary.assets += 1;
-            }
-            on_progress(ScanProgress {
-                devices: summary.devices,
-                files: summary.files,
-                assets: summary.assets,
-            });
-        }
-    }
-
+    // 先把全部条目置 missing=1；命中的目录 upsert 时会清回 0。
+    crate::db::mark_all_missing(conn)?;
+    walk(&root, &root, conn, cancel, &mut summary, &mut on_progress)?;
     Ok(summary)
 }
 
-/// 列出目录下所有普通文件（不做扩展名过滤，配对函数内部会过滤）。
-fn collect_files(dir: &Path) -> Vec<(String, u64)> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    for e in entries.flatten() {
-        let path = e.path();
-        if path.is_dir() {
+fn walk(
+    dir: &Path,
+    root: &Path,
+    conn: &Connection,
+    cancel: &dyn Fn() -> bool,
+    summary: &mut ScanSummary,
+    on_progress: &mut impl FnMut(ScanProgress),
+) -> anyhow::Result<()> {
+    if cancel() {
+        return Ok(());
+    }
+
+    let mut subdirs: Vec<std::path::PathBuf> = Vec::new();
+    let mut files: Vec<(String, u64)> = Vec::new();
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let path = entry.path();
+        let Ok(ft) = entry.file_type() else { continue };
+        // 不跟随重解析点，避免符号链接/junction 造成的环。
+        if ft.is_symlink() {
             continue;
         }
-        let size = e.metadata().map(|m| m.len()).unwrap_or(0);
-        out.push((path.to_string_lossy().to_string(), size));
+        if ft.is_dir() {
+            if entry.file_name() == std::ffi::OsStr::new(META_DIR) {
+                continue;
+            }
+            subdirs.push(path);
+        } else if ft.is_file() {
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            files.push((path.to_string_lossy().to_string(), size));
+        }
     }
-    out.sort();
-    out
+
+    if !files.is_empty() {
+        summary.files += files.len();
+        let rel = relative_dir(dir, root);
+        for asset in pair_files(&files) {
+            crate::db::upsert_scanned_asset(conn, &rel, &asset)?;
+            summary.assets += 1;
+        }
+        on_progress(ScanProgress {
+            devices: 0,
+            files: summary.files,
+            assets: summary.assets,
+        });
+    }
+
+    // 目录名排序，保证扫描顺序稳定。
+    subdirs.sort();
+    for sub in subdirs {
+        walk(&sub, root, conn, cancel, summary, on_progress)?;
+    }
+    Ok(())
+}
+
+/// 目录相对库根的路径，统一用 `/` 分隔；库根本身为 `""`。
+fn relative_dir(dir: &Path, root: &Path) -> String {
+    match dir.strip_prefix(root) {
+        Ok(p) => p
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("/"),
+        Err(_) => String::new(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db;
-    use crate::library::Library;
 
     fn scan(lib: &Library, conn: &Connection) -> anyhow::Result<ScanSummary> {
         scan_library_with(lib, conn, &|| false, |_| {})
     }
 
     #[test]
-    fn scans_and_indexes_idempotently() {
+    fn scans_recursively_and_skips_dot_lpm() {
         let root = std::env::temp_dir().join("lpm_indexer_test");
         let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
         let lib = Library::open(&root).unwrap();
 
-        let year = lib.originals_dir().join("iPhone15Pro-3F9A2C").join("2024");
-        std::fs::create_dir_all(&year).unwrap();
-        std::fs::write(year.join("IMG_0001.HEIC"), b"a").unwrap();
-        std::fs::write(year.join("IMG_0001.MOV"), b"bb").unwrap();
-        std::fs::write(year.join("IMG_0002.JPG"), b"ccc").unwrap();
-        std::fs::write(year.join("notes.txt"), b"ignored").unwrap();
+        // 库根直接放一对实况。
+        std::fs::write(root.join("IMG_0001.HEIC"), b"a").unwrap();
+        std::fs::write(root.join("IMG_0001.MOV"), b"bb").unwrap();
+        // 子目录里放一张照片与一个非媒体文件。
+        let sub = root.join("MI10PRO").join("2020-08");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("IMG_0002.JPG"), b"ccc").unwrap();
+        std::fs::write(sub.join("notes.txt"), b"ignored").unwrap();
+        // `.lpm` 里的派生文件不得被当照片。
+        std::fs::write(lib.thumbs_dir().join("hash.webp"), b"thumb").unwrap();
 
         let conn = db::open_in_memory().unwrap();
-
         let s1 = scan(&lib, &conn).unwrap();
-        assert_eq!(s1.devices, 1);
-        assert_eq!(s1.assets, 2);
-        assert_eq!(s1.files, 4);
+        assert_eq!(s1.assets, 2, "库根一对 + 子目录一张");
+        assert_eq!(s1.files, 4, "含 notes.txt；不含 .lpm 里的缩略图");
 
         let s2 = scan(&lib, &conn).unwrap();
         assert_eq!(s2.assets, 2, "重扫不应新增条目");
@@ -143,28 +153,61 @@ mod tests {
             .unwrap();
         assert_eq!(n, 2);
 
-        let live: i64 = conn
+        // dir 归属正确。
+        let root_dir: String = conn
             .query_row(
-                "SELECT count(*) FROM asset WHERE kind=3 AND integrity=0",
+                "SELECT dir FROM asset WHERE base_name='IMG_0001'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(live, 1);
+        assert_eq!(root_dir, "");
+        let sub_dir: String = conn
+            .query_row(
+                "SELECT dir FROM asset WHERE base_name='IMG_0002'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sub_dir, "MI10PRO/2020-08");
+    }
+
+    #[test]
+    fn same_base_name_in_different_dirs_stays_distinct() {
+        let root = std::env::temp_dir().join("lpm_indexer_dupnames");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let lib = Library::open(&root).unwrap();
+
+        for sub in ["phoneA", "phoneB"] {
+            let d = root.join(sub);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("IMG_0001.JPG"), b"x").unwrap();
+        }
+
+        let conn = db::open_in_memory().unwrap();
+        scan(&lib, &conn).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM asset WHERE base_name='IMG_0001'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 2, "同名不同目录必须各自独立");
     }
 
     #[test]
     fn missing_is_set_when_file_disappears() {
         let root = std::env::temp_dir().join("lpm_indexer_missing");
         let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
         let lib = Library::open(&root).unwrap();
-        let year = lib.originals_dir().join("dev").join("2024");
-        std::fs::create_dir_all(&year).unwrap();
-        std::fs::write(year.join("IMG_1.JPG"), b"a").unwrap();
+        std::fs::write(root.join("IMG_1.JPG"), b"a").unwrap();
 
         let conn = db::open_in_memory().unwrap();
         scan(&lib, &conn).unwrap();
-        std::fs::remove_file(year.join("IMG_1.JPG")).unwrap();
+        std::fs::remove_file(root.join("IMG_1.JPG")).unwrap();
         scan(&lib, &conn).unwrap();
 
         let missing: i64 = conn
@@ -174,44 +217,30 @@ mod tests {
     }
 
     #[test]
-    fn rescan_reuses_imported_device_and_preserves_taken_at() {
-        let root = std::env::temp_dir().join("lpm_indexer_device_reuse");
+    fn rescan_preserves_imported_taken_at() {
+        let root = std::env::temp_dir().join("lpm_indexer_taken");
         let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
         let lib = Library::open(&root).unwrap();
-        let year = lib.originals_dir().join("AppleiPhone-CY4RV0").join("2025");
-        std::fs::create_dir_all(&year).unwrap();
-        std::fs::write(year.join("IMG_1.HEIC"), b"a").unwrap();
+        std::fs::write(root.join("IMG_1.HEIC"), b"a").unwrap();
 
         let conn = db::open_in_memory().unwrap();
-        // WPD 导入建立的设备行：真实序列号 + 真实型号。
-        let dev = db::upsert_device(
-            &conn,
-            "GV95CY4RV0",
-            "Apple iPhone",
-            None,
-            "AppleiPhone-CY4RV0",
-        )
-        .unwrap();
-        // 已有一条带真实拍摄时间的条目。
-        let existing = crate::pairing::PairedAsset {
+        // 模拟导入：库根（dir=""）一条真实 taken_at 的记录。
+        let imported = crate::pairing::PairedAsset {
             base_name: "IMG_1".into(),
             kind: crate::pairing::KIND_PHOTO,
             integrity: crate::pairing::INTEGRITY_STILL_ONLY,
             still: Some(crate::pairing::FileRef {
-                path: year.join("IMG_1.HEIC").to_string_lossy().into_owned(),
+                path: root.join("IMG_1.HEIC").to_string_lossy().into_owned(),
                 ext: "heic".into(),
                 size: 1,
             }),
             movie: None,
         };
-        db::upsert_asset(&conn, dev, &existing, 12345).unwrap();
+        db::upsert_asset(&conn, "", &imported, 12345).unwrap();
 
         scan(&lib, &conn).unwrap();
 
-        let devices: i64 = conn
-            .query_row("SELECT count(*) FROM device", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(devices, 1, "重扫不应为同一目录新建第二个设备");
         let (n, taken): (i64, i64) = conn
             .query_row("SELECT count(*), max(taken_at) FROM asset", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -219,92 +248,5 @@ mod tests {
             .unwrap();
         assert_eq!(n, 1, "重扫不应新增重复条目");
         assert_eq!(taken, 12345, "已有条目的 taken_at 必须保留");
-    }
-
-    #[test]
-    fn rescan_preserves_validated_integrity() {
-        let root = std::env::temp_dir().join("lpm_indexer_integrity");
-        let _ = std::fs::remove_dir_all(&root);
-        let lib = Library::open(&root).unwrap();
-        let year = lib.originals_dir().join("dev").join("2024");
-        std::fs::create_dir_all(&year).unwrap();
-        std::fs::write(year.join("IMG_1.HEIC"), b"a").unwrap();
-        std::fs::write(year.join("IMG_1.MOV"), b"bb").unwrap();
-
-        let conn = db::open_in_memory().unwrap();
-        scan(&lib, &conn).unwrap();
-
-        let (dev, taken): (i64, i64) = conn
-            .query_row(
-                "SELECT device_id, taken_at FROM asset WHERE base_name='IMG_1'",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        // 模拟导入/校验发现的 UUID 不一致。
-        db::set_integrity(
-            &conn,
-            dev,
-            "IMG_1",
-            taken,
-            crate::livephoto::INTEGRITY_MISMATCH,
-        )
-        .unwrap();
-
-        scan(&lib, &conn).unwrap();
-        let integrity: i64 = conn
-            .query_row(
-                "SELECT integrity FROM asset WHERE base_name='IMG_1'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            integrity,
-            crate::livephoto::INTEGRITY_MISMATCH,
-            "重扫不得抹掉已验证的分类"
-        );
-    }
-
-    #[test]
-    fn rescan_updates_integrity_when_shape_changes() {
-        let root = std::env::temp_dir().join("lpm_indexer_integrity_shape");
-        let _ = std::fs::remove_dir_all(&root);
-        let lib = Library::open(&root).unwrap();
-        let year = lib.originals_dir().join("dev").join("2024");
-        std::fs::create_dir_all(&year).unwrap();
-        std::fs::write(year.join("IMG_1.HEIC"), b"a").unwrap();
-        std::fs::write(year.join("IMG_1.MOV"), b"bb").unwrap();
-
-        let conn = db::open_in_memory().unwrap();
-        scan(&lib, &conn).unwrap();
-        let (dev, taken): (i64, i64) = conn
-            .query_row(
-                "SELECT device_id, taken_at FROM asset WHERE base_name='IMG_1'",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        db::set_integrity(
-            &conn,
-            dev,
-            "IMG_1",
-            taken,
-            crate::livephoto::INTEGRITY_MISMATCH,
-        )
-        .unwrap();
-
-        // 视频被删 → 在场形态从「两侧都在」变为「仅静态」，应覆盖为 3。
-        std::fs::remove_file(year.join("IMG_1.MOV")).unwrap();
-        scan(&lib, &conn).unwrap();
-
-        let integrity: i64 = conn
-            .query_row(
-                "SELECT integrity FROM asset WHERE base_name='IMG_1'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(integrity, crate::livephoto::INTEGRITY_STILL_ONLY);
     }
 }

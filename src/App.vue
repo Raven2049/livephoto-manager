@@ -148,8 +148,8 @@ async function exportSelected() {
 
 async function deleteIdsConfirm(ids: number[]) {
   if (!ids.length) return;
-  // feedback.md：预期内的删除不必警告（Finder 移入废纸篓不弹确认）；仅批量时确认。
-  if (ids.length >= 10) {
+  // 单张删除直接进回收站（可还原，不弹确认）；批量（≥2）先确认。
+  if (ids.length >= 2) {
     const ok = await askConfirm(
       `将删除 ${ids.length} 个条目并移入回收站（实况条目会同时删除静态图与视频）。\n回收站容量不足时，大文件可能被永久删除。`,
     );

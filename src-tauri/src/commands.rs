@@ -288,7 +288,8 @@ pub async fn import_from_device(
             .clone()
             .unwrap_or_else(|| info.folder_name.clone());
         let model = info.model.clone().unwrap_or_else(|| "unknown".into());
-        let device_id = crate::db::upsert_device(
+        // 仅记录导入来源（供诊断报告），不参与 asset 业务键。
+        crate::db::upsert_device(
             &conn,
             &serial,
             &model,
@@ -308,8 +309,8 @@ pub async fn import_from_device(
             })
             .collect();
 
-        let existing = crate::db::existing_sizes(&conn)?;
-        let tasks = importer::diff_tasks(&device_files, &existing);
+        let existing = crate::db::imported_sizes(&conn)?;
+        let tasks = importer::diff_tasks(&device_files, &existing, &serial);
 
         let mut transfer = WpdTransfer {
             content: device.content(),
@@ -323,10 +324,9 @@ pub async fn import_from_device(
         let started = std::time::Instant::now();
         let progress = importer::run_tasks(
             &tasks,
-            &lib.originals_dir(),
+            lib.root(),
             &lib.thumbs_dir(),
-            &info.folder_name,
-            device_id,
+            &serial,
             &conn,
             &mut transfer,
             &mut thumbs,
@@ -731,18 +731,11 @@ pub async fn classify_library(
             );
             crate::db::set_content_id(
                 &conn,
-                job.device_id,
+                &job.dir,
                 &job.base_name,
-                job.taken_at,
                 still_id.as_deref().or(movie_id.as_deref()),
             )?;
-            crate::db::set_integrity(
-                &conn,
-                job.device_id,
-                &job.base_name,
-                job.taken_at,
-                integrity,
-            )?;
+            crate::db::set_integrity(&conn, &job.dir, &job.base_name, integrity)?;
             changed += 1;
             if changed - last_emit >= 20 {
                 last_emit = changed;
