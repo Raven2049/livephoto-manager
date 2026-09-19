@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { lpmUrl } from "../lib/lpm";
 import type { AssetRow } from "../stores/library";
+import AppIcon from "./AppIcon.vue";
 
 const props = defineProps<{
   assets: AssetRow[];
@@ -58,12 +59,13 @@ function zoomAt(cx: number, cy: number, factor: number) {
 }
 
 function onWheel(e: WheelEvent) {
+  if (playing.value) return; // 播放时不缩放
   e.preventDefault();
   zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15);
 }
 function onPointerDown(e: PointerEvent) {
   moved = false;
-  if (scale.value <= 1) return;
+  if (playing.value || scale.value <= 1) return;
   dragging = true;
   lastX = e.clientX;
   lastY = e.clientY;
@@ -84,6 +86,43 @@ function onPointerUp() {
 function onStageClick() {
   if (moved) return;
   emit("close");
+}
+
+/* ---------- 实况 / 视频播放（HIG live-photos/playing-video） ---------- */
+const playSrc = ref<string | null>(null);
+const playing = ref(false);
+const playLoading = ref(false);
+const playFailed = ref(false);
+
+function resetPlay() {
+  playing.value = false;
+  playSrc.value = null;
+  playLoading.value = false;
+  playFailed.value = false;
+}
+
+async function togglePlay() {
+  if (playing.value) {
+    playing.value = false;
+    return;
+  }
+  if (playSrc.value) {
+    playing.value = true;
+    return;
+  }
+  const a = asset.value;
+  if (!a) return;
+  playLoading.value = true;
+  playFailed.value = false;
+  try {
+    const p = await invoke<string>("ensure_view_video", { assetId: a.id });
+    playSrc.value = lpmUrl(p);
+    playing.value = true;
+  } catch {
+    playFailed.value = true;
+  } finally {
+    playLoading.value = false;
+  }
 }
 
 async function load(i: number) {
@@ -130,15 +169,22 @@ function next() {
 }
 
 function onKey(e: KeyboardEvent) {
-  if (e.key === "Escape") emit("close");
-  else if (e.key === "ArrowLeft") prev();
-  else if (e.key === "ArrowRight") next();
+  if (e.key === "Escape") {
+    emit("close");
+  } else if (playing.value && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === " ")) {
+    // 播放中把方向键/空格留给视频控件，不翻页
+  } else if (e.key === "ArrowLeft") {
+    prev();
+  } else if (e.key === "ArrowRight") {
+    next();
+  }
 }
 
 watch(
   () => props.index,
   (i) => {
     resetView();
+    resetPlay();
     void load(i);
     prefetch(i + 1);
     prefetch(i - 1);
@@ -161,7 +207,7 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
     <div
       ref="stageEl"
       class="v-stage"
-      :class="{ zoomed: scale > 1 }"
+      :class="{ zoomed: scale > 1 && !playing }"
       @click.self="onStageClick"
       @wheel="onWheel"
       @pointerdown="onPointerDown"
@@ -171,13 +217,45 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
     >
       <div v-if="loading" class="v-msg">正在生成大图…</div>
       <div v-else-if="failed" class="v-msg">无法显示这张图</div>
-      <img
-        v-else-if="src"
-        :src="src"
-        :alt="asset?.base_name"
-        :style="{ transform: `translate(${tx}px, ${ty}px) scale(${scale})` }"
-        draggable="false"
-      />
+
+      <!-- 播放实况/视频（静音 H.264 代理） -->
+      <video
+        v-else-if="playing && playSrc"
+        class="v-video"
+        :src="playSrc"
+        controls
+        autoplay
+        :loop="asset?.kind === 3"
+        @ended="playing = false"
+      ></video>
+
+      <template v-else-if="src">
+        <img
+          :src="src"
+          :alt="asset?.base_name"
+          :style="{ transform: `translate(${tx}px, ${ty}px) scale(${scale})` }"
+          draggable="false"
+        />
+        <!-- 实况：LIVE 切换；视频：播放按钮（实况不用播放按钮，见 HIG） -->
+        <button
+          v-if="asset?.kind === 3"
+          class="live-btn"
+          :disabled="playLoading"
+          @click.stop="togglePlay"
+        >
+          <span class="live-dot"></span>LIVE
+        </button>
+        <button
+          v-else-if="asset?.kind === 2"
+          class="play-btn"
+          :disabled="playLoading"
+          aria-label="播放"
+          @click.stop="togglePlay"
+        >
+          <AppIcon name="play" :size="30" />
+        </button>
+        <div v-if="playFailed" class="v-msg play-err">无法播放</div>
+      </template>
     </div>
 
     <button
@@ -238,6 +316,65 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
 .v-msg {
   color: rgba(255, 255, 255, 0.75);
   font-size: 14px;
+}
+.v-video {
+  max-width: 100%;
+  max-height: 100%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+/* 实况切换：左上角 LIVE 胶囊（HIG：实况用固定角落徽标，不用播放按钮） */
+.live-btn {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  z-index: 2;
+}
+.live-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.28);
+}
+.live-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ff453a;
+}
+.play-btn {
+  position: absolute;
+  width: 64px;
+  height: 64px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  z-index: 2;
+}
+.play-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.7);
+}
+.play-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.play-err {
+  position: absolute;
+  bottom: 56px;
 }
 .v-close {
   position: absolute;

@@ -4,6 +4,7 @@ import { lpmUrl } from "../lib/lpm";
 import { buildLayout, headerHeight, type TileCell } from "../lib/gridLayout";
 import type { AssetGroup, Granularity } from "../lib/timeline";
 import type { AssetRow } from "../stores/library";
+import AppIcon from "./AppIcon.vue";
 
 const props = defineProps<{
   groups: AssetGroup[];
@@ -672,6 +673,11 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
               decoding="async"
               draggable="false"
             />
+            <!-- 实况 / 视频徽标：固定角落，实况用 LIVE 文字（不用播放按钮，见 HIG live-photos） -->
+            <span v-if="cell.asset.kind === 3" class="badge live">LIVE</span>
+            <span v-else-if="cell.asset.kind === 2" class="badge">
+              <AppIcon name="play" />
+            </span>
             <span v-if="props.selected.has(cell.asset.id)" class="check">✓</span>
             <span v-else-if="armingId === cell.asset.id" class="check arming">
               <svg viewBox="0 0 24 24"><circle class="ring" cx="12" cy="12" r="10" /></svg>
@@ -759,6 +765,39 @@ defineExpose({ el: scroller, captureAnchor, restoreAnchor });
   outline: 3px solid var(--accent);
   outline-offset: -3px;
 }
+/* 实况/视频徽标：固定左上角，字号随瓦片尺寸缩放 */
+.badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: clamp(8px, calc(var(--ts, 96px) * 0.13), 11px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  z-index: 1;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+}
+.badge.live::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+}
+.badge svg {
+  width: 1em;
+  height: 1em;
+}
+
 /* 键盘焦点：外描边，明显区别于选中态 */
 .tile:focus-visible {
   outline: 3px solid var(--accent);

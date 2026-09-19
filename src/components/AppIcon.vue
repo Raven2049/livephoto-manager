@@ -13,6 +13,7 @@ const PATHS: Record<string, string> = {
     '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/>',
   check: '<path d="m5 13 4 4L19 7"/>',
   warn: '<path d="M12 3 2 21h20z"/><path d="M12 10v5"/><path d="M12 18h.01"/>',
+  play: '<path d="M7 4v16l13-8z"/>',
 };
 </script>
 
