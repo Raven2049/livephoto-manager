@@ -305,10 +305,7 @@ export const useLibrary = defineStore("library", () => {
     setSelected(next);
   }
 
-  /** 只选中一项（右键菜单用）。 */
-  function selectOnly(id: number) {
-    setSelected(new Set([id]));
-  }
+
 
   /** 清空全部筛选条件并重新加载。 */
   function clearFilters() {
@@ -335,9 +332,8 @@ export const useLibrary = defineStore("library", () => {
   const exporting = ref(false);
   const exportProgress = ref<ExportProgress | null>(null);
 
-  /** 把选中条目原样拷贝到 `dest` 目录。 */
-  async function exportSelected(dest: string) {
-    const ids = [...selected.value];
+  /** 把指定条目原样拷贝到 `dest` 目录。 */
+  async function exportIds(ids: number[], dest: string) {
     if (!ids.length) return;
     exporting.value = true;
     error.value = null;
@@ -359,9 +355,8 @@ export const useLibrary = defineStore("library", () => {
   const deleting = ref(false);
   const deleteProgress = ref<DeleteProgress | null>(null);
 
-  /** 把选中条目移入回收站并清理索引/缓存。 */
-  async function deleteSelected() {
-    const ids = [...selected.value];
+  /** 把指定条目移入回收站并清理索引/缓存。 */
+  async function deleteIds(ids: number[]) {
     if (!ids.length) return;
     deleting.value = true;
     error.value = null;
@@ -379,6 +374,15 @@ export const useLibrary = defineStore("library", () => {
       deleting.value = false;
       deleteProgress.value = null;
     }
+  }
+
+  /** 选中项导出（保持既有调用）。 */
+  async function exportSelected(dest: string) {
+    await exportIds([...selected.value], dest);
+  }
+  /** 选中项删除。 */
+  async function deleteSelected() {
+    await deleteIds([...selected.value]);
   }
 
   /** 兼容既有调用：刷新统计 + 重置分页。 */
@@ -417,15 +421,16 @@ export const useLibrary = defineStore("library", () => {
     refresh,
     toggleSelect,
     setSelection,
-    selectOnly,
     clearFilters,
     selectAll,
     clearSelection,
     exporting,
     exportProgress,
+    exportIds,
     exportSelected,
     deleting,
     deleteProgress,
+    deleteIds,
     deleteSelected,
   };
 });

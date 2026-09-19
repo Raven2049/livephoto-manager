@@ -126,28 +126,33 @@ async function exportDiag() {
   }
 }
 
-async function exportSelected() {
+async function exportIdsTo(ids: number[]) {
+  if (!ids.length) return;
   const dir = await open({ directory: true, multiple: false });
   if (typeof dir !== "string") return;
-  const n = lib.selected.size;
-  await lib.exportSelected(dir);
+  await lib.exportIds(ids, dir);
   if (lib.error) toastError();
-  else toast(`已导出 ${n} 个条目到 ${dir}`, "info", dir);
+  else toast(`已导出 ${ids.length} 个条目到 ${dir}`, "info", dir);
+}
+async function exportSelected() {
+  await exportIdsTo([...lib.selected]);
 }
 
-async function deleteSelected() {
-  const n = lib.selected.size;
-  if (!n) return;
+async function deleteIdsConfirm(ids: number[]) {
+  if (!ids.length) return;
   // feedback.md：预期内的删除不必警告（Finder 移入废纸篓不弹确认）；仅批量时确认。
-  if (n >= 10) {
+  if (ids.length >= 10) {
     const ok = await askConfirm(
-      `将删除 ${n} 个条目并移入回收站（实况条目会同时删除静态图与视频）。\n回收站容量不足时，大文件可能被永久删除。`,
+      `将删除 ${ids.length} 个条目并移入回收站（实况条目会同时删除静态图与视频）。\n回收站容量不足时，大文件可能被永久删除。`,
     );
     if (!ok) return;
   }
-  await lib.deleteSelected();
+  await lib.deleteIds(ids);
   if (lib.error) toastError();
   // 成功不弹 toast：条目消失本身就是反馈
+}
+async function deleteSelected() {
+  await deleteIdsConfirm([...lib.selected]);
 }
 
 /* ---------- 网格与预览 ---------- */
@@ -320,22 +325,26 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-/* ---------- 瓦片右键菜单（只放主界面已有的动作；删除置底红色） ---------- */
+/* ---------- 瓦片右键菜单（只放主界面已有的动作；删除置底红色） ----------
+ * 右键**不改变选择**：作用于「被点条目」，或（若它已在选区里）整个选区。 */
 const ctx = ref<{ x: number; y: number } | null>(null);
+const ctxIds = ref<number[]>([]);
 function onContextMenu(id: number, x: number, y: number) {
-  if (!lib.selected.has(id)) lib.selectOnly(id);
+  ctxIds.value = lib.selected.has(id) ? [...lib.selected] : [id];
   ctx.value = {
     x: Math.min(x, window.innerWidth - 200),
     y: Math.min(y, window.innerHeight - 150),
   };
 }
 function ctxExport() {
+  const ids = ctxIds.value;
   ctx.value = null;
-  void exportSelected();
+  void exportIdsTo(ids);
 }
 function ctxDelete() {
+  const ids = ctxIds.value;
   ctx.value = null;
-  void deleteSelected();
+  void deleteIdsConfirm(ids);
 }
 
 async function openRecent(path: string) {
@@ -741,15 +750,15 @@ const filtersActive = computed(
       :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }"
       @click.stop
     >
-      <div v-if="lib.selected.size > 1" class="ctx-title">
-        已选 {{ lib.selected.size }} 项
+      <div v-if="ctxIds.length > 1" class="ctx-title">
+        已选 {{ ctxIds.length }} 项
       </div>
       <button class="menu-item" @click="ctxExport">
-        <AppIcon name="export" :size="15" />导出选中…
+        <AppIcon name="export" :size="15" />导出…
       </button>
       <div class="menu-sep"></div>
       <button class="menu-item danger" @click="ctxDelete">
-        <AppIcon name="trash" :size="15" />删除选中…
+        <AppIcon name="trash" :size="15" />删除…
       </button>
     </div>
 
