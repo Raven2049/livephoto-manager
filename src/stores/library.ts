@@ -384,7 +384,19 @@ export const useLibrary = defineStore("library", () => {
     try {
       const r = await invoke<DeleteSummary>("delete_assets", { ids });
       if (r.failed) error.value = `删除完成，失败 ${r.failed} 项`;
-      await refresh();
+      if (r.failed) {
+        // 有失败项：以服务端为准（少见，允许一次整表重载）。
+        await refresh();
+      } else {
+        // 就地移除，避免重置分页导致滚动跳回上面（layout.md：位置可预测）。
+        const gone = new Set(ids);
+        assets.value = assets.value.filter((a) => !gone.has(a.id));
+        total.value = Math.max(0, total.value - r.deleted);
+        const sel = new Set(selected.value);
+        for (const id of ids) sel.delete(id);
+        setSelected(sel);
+        await refreshStats();
+      }
     } catch (e) {
       error.value = String(e);
     } finally {
