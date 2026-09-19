@@ -52,6 +52,32 @@ npm run tauri dev
 
 打包绿色版见 `docs/releasing.md`；开发约定见 `AGENTS.md`。
 
+## 关于开发 / 致谢
+
+这个项目基本是和 AI 一起做出来的：**开发全程使用 DeepSeek V4.1 Flash，作者本人没有手写代码**，
+主要是提需求、做测试、把问题反馈回去。所以代码里如果有什么不合理的地方，大概也情有可原，欢迎直接开 issue。
+
+过程中参考/借助了这些 skills（都是第三方开源仓库，仅作参考；其中 `tauri-v2` 的来源仓库 star 数很少，
+Tauri 2 的 API 一律以官方文档为准）：
+
+- `rust-best-practices` — apollographql/skills
+- `rust-async-patterns` — wshobson/agents
+- `ffmpeg` — digitalsamba/claude-code-video-toolkit
+- `tauri-v2` — nodnarbnitram/claude-code-extensions
+- `apple-hig` — justinwetch/higagentskills（界面按经典 HIG，未采用 iOS 26+ 的 Liquid Glass）
+- `custom-icons` — jkc66/custom-icons-skill（应用图标）
+
+安装（示例）：
+
+```bash
+npx skills add apollographql/skills@rust-best-practices -g -y
+npx skills add wshobson/agents@rust-async-patterns -g -y
+npx skills add digitalsamba/claude-code-video-toolkit@ffmpeg -g -y
+npx skills add nodnarbnitram/claude-code-extensions@tauri-v2 -g -y
+npx skills add justinwetch/higagentskills@apple-hig -g -y
+npx skills add jkc66/custom-icons-skill@custom-icons -g -y
+```
+
 ## 说明
 
 - 仅支持 Windows（macOS 有系统方案，这个主要是补 Windows 的空白）。
