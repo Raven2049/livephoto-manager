@@ -152,16 +152,48 @@ CREATE INDEX IF NOT EXISTS idx_asset_integrity  ON asset(integrity);
 - `open_library` 的「拒绝盘根 / 系统目录」（`validate_library_root`）保留。
 - `.lpm` 设隐藏属性（`SetFileAttributesW` + `FILE_ATTRIBUTE_HIDDEN`；新增 `windows` crate feature `Win32_Storage_FileSystem`）。
 
-## 10. 拍摄时间（Phase 4，需实测）
+## 10. 拍摄时间（Phase 4）
 
-磁盘上的老照片没有 `taken_at`。要让时间线正确，需从文件读取：
+### 10.1 实测结论（2026-09-19，真实素材）
 
-1. `ffprobe`：MOV 的 `creation_time` / `com.apple.quicktime.creationdate`；HEIC 是否有可用 tag **待实测**。
-2. 自写 EXIF `DateTimeOriginal`（tag 0x9003）解析（JPG 先做，HEIC 视实测）。
-3. 回退文件修改时间（`taken_src=1`）。
-4. 都失败 → 0 / 未知日期。
+- 裁剪版 `ffprobe` 能读 **MOV/MP4** 的 `creation_time`（UTC）与 `com.apple.quicktime.creationdate`（带时区 +0800）；
+  但 **HEIC 只报 brand、读不到任何时间**，**JPG 的 `format_tags` 里也没有时间**。
+- 真实 Android JPG 的 EXIF 里有 `2020:08:04 10:03:03`；部分 Android `mp4`（微信产物）无 `creation_time`。
 
-Phase 1–3 期间，扫描到的文件 `taken_at=0`（沿用现状），导入的文件仍用 WPD 提供的真实时间。
+→ 结论：**静态图必须自写 EXIF 解析**；视频可用 mvhd（自写）或 ffprobe。
+
+### 10.2 取时间来源（优先级）
+
+1. **静态图** `jpg/jpeg/heic/heif`：自写 EXIF —— ExifIFD `DateTimeOriginal`(0x9003) → `DateTimeDigitized`(0x9004) → IFD0 `DateTime`(0x0132)。
+2. **视频** `mov/mp4/m4v`：自写 `moov/mvhd` 的 `creation_time`（1904 基准，UTC）。
+3. **回退**：文件修改时间（mtime）。
+4. 仍无 → `0` / 未知日期。
+
+`taken_src`：`0` unknown、`1` mtime、`2` exif/meta。
+
+### 10.3 时区
+
+- EXIF 无时区 → 按**本地时间**解释为 epoch。
+- MOV `mvhd` 为 UTC → 直接换算。（Apple `com.apple.quicktime.creationdate` 带偏移，可后续用于精确本地时刻。）
+
+### 10.4 实现（纯 Rust，避免逐文件起 ffprobe）
+
+- 新增 `time.rs`（或 `exif.rs`）：
+  - JPEG：找 `APP1`(0xFFE1) + `Exif\0\0` → TIFF；
+  - HEIC：解析 ISO BMFF（`meta`→`iinf`→`iloc` 定位 `Exif` item）→ TIFF；
+  - 再按 TIFF IFD 结构取上述 tag。
+  - MOV/MP4：扫 `moov`→`mvhd` 取 `creation_time`。
+- `indexer` 扫描时对每个媒体文件取时间，写入 `taken_at`/`taken_src`。
+
+### 10.5 重扫
+
+- 已有条目：仅当新来源**优于**旧来源时更新（`exif/meta` > `mtime` > `unknown`），否则保留（与 integrity 同理）。
+- 导入条目（来源 WPD，真实时间，`taken_src=2`）不会被扫描覆盖。
+
+> **状态（2026-09-19，已实现）**：`src-tauri/src/time.rs`（EXIF / mvhd / mtime 回退；EXIF 无时区按本机时区解释为真实 epoch）
+> 已接入 `indexer`。真实目录实测：`MI10PRO`（Android JPG）与 `iPhone`（HEIC+MOV 实况）拍摄时间均正确，
+> 且 HEIC 与同组 MOV 推出的时间一致；已有 meta 时间的条目重扫跳过读文件（2067 条约 0.4s）。
+
 
 ## 11. 影响模块
 

@@ -680,7 +680,7 @@ mod tests {
             }),
             movie: None,
         };
-        db::upsert_asset(&conn, "", &a, 0).unwrap();
+        db::upsert_scanned_asset(&conn, "", &a, 0, 0).unwrap();
         db::set_asset_status(&conn, "", "IMG_1", STATUS_COPIED, None).unwrap();
 
         let mut thumbs = FakeThumbs { fail: false };

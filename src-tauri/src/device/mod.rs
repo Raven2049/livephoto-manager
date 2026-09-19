@@ -86,13 +86,15 @@ pub struct DeviceInfo {
 /// 形如 `"2026/04/30:19:42:06.000"` 的本地时间字符串。因此优先试 double，
 /// 失败则解析字符串。
 pub fn taken_at_from_pv(pv: &PROPVARIANT) -> Option<i64> {
+    // 设备给的是**本地时间**；taken_at 约定为真实 epoch（UTC 瞬时），故减去本机 UTC 偏移。
+    let off = crate::time::local_offset_secs();
     if let Ok(ole) = f64::try_from(pv) {
         if ole > 0.0 {
-            return Some(((ole - 25569.0) * 86400.0) as i64);
+            return Some(((ole - 25569.0) * 86400.0) as i64 - off);
         }
     }
     let s = BSTR::try_from(pv).ok()?.to_string();
-    parse_date_string(&s)
+    parse_date_string(&s).map(|e| e - off)
 }
 
 /// 解析形如 `YYYY/MM/DD:HH:MM:SS(.mmm)` 的本地时间字符串为 epoch 秒。
@@ -126,7 +128,7 @@ pub fn parse_date_string(s: &str) -> Option<i64> {
 }
 
 /// 民用历 (y,m,d) → 自 1970-01-01 起的天数（Howard Hinnant 算法）。
-fn days_from_civil(y: i32, m: i32, d: i32) -> i64 {
+pub(crate) fn days_from_civil(y: i32, m: i32, d: i32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y } as i64;
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400; // [0, 399]

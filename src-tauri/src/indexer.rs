@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use rusqlite::Connection;
@@ -41,20 +42,33 @@ pub fn scan_library_with(
         return Ok(summary);
     }
 
+    // 已有元数据来源拍摄时间的条目：重扫时跳过读文件（传 (0,UNKNOWN) 即保留旧值）。
+    let have_time = crate::db::assets_with_meta_time(conn)?;
+
     // 整次扫描包在一个事务里：否则每条 upsert 都是独立事务并逐条落盘，
     // 在机械盘/被杀软扫描的盘上会慢到不可用（实测 2000 条约 150s → 事务内 <1s）。
     let tx = conn.unchecked_transaction()?;
     // 先把全部条目置 missing=1；命中的目录 upsert 时会清回 0。
     crate::db::mark_all_missing(&tx)?;
-    walk(&root, &root, &tx, cancel, &mut summary, &mut on_progress)?;
+    walk(
+        &root,
+        &root,
+        &tx,
+        &have_time,
+        cancel,
+        &mut summary,
+        &mut on_progress,
+    )?;
     tx.commit()?;
     Ok(summary)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk(
     dir: &Path,
     root: &Path,
     conn: &Connection,
+    have_time: &HashSet<(String, String)>,
     cancel: &dyn Fn() -> bool,
     summary: &mut ScanSummary,
     on_progress: &mut impl FnMut(ScanProgress),
@@ -87,7 +101,23 @@ fn walk(
         summary.files += files.len();
         let rel = relative_dir(dir, root);
         for asset in pair_files(&files) {
-            crate::db::upsert_scanned_asset(conn, &rel, &asset)?;
+            // 拍摄时间：已有元数据来源则跳过读文件；否则静态图优先（EXIF）、
+            // 其次视频（mvhd），都读不到回退文件修改时间。
+            let (taken_at, taken_src) =
+                if have_time.contains(&(rel.clone(), asset.base_name.clone())) {
+                    (0, crate::time::SRC_UNKNOWN)
+                } else {
+                    let src_path = asset
+                        .still
+                        .as_ref()
+                        .map(|f| f.path.as_str())
+                        .or_else(|| asset.movie.as_ref().map(|f| f.path.as_str()));
+                    match src_path {
+                        Some(p) => crate::time::capture_time(Path::new(p)),
+                        None => (0, crate::time::SRC_UNKNOWN),
+                    }
+                };
+            crate::db::upsert_scanned_asset(conn, &rel, &asset, taken_at, taken_src)?;
             summary.assets += 1;
         }
         on_progress(ScanProgress {
@@ -100,7 +130,7 @@ fn walk(
     // 目录名排序，保证扫描顺序稳定。
     subdirs.sort();
     for sub in subdirs {
-        walk(&sub, root, conn, cancel, summary, on_progress)?;
+        walk(&sub, root, conn, have_time, cancel, summary, on_progress)?;
     }
     Ok(())
 }
@@ -241,7 +271,8 @@ mod tests {
             }),
             movie: None,
         };
-        db::upsert_asset(&conn, "", &imported, 12345).unwrap();
+        // 模拟导入：库根（dir=""）一条真实 taken_at 的导入记录（taken_src=2）。
+        db::upsert_imported_asset(&conn, "", &imported, 12345, "SN1", "IMG_1").unwrap();
 
         scan(&lib, &conn).unwrap();
 
@@ -302,7 +333,11 @@ mod tests {
 
         eprintln!("-- 抽样（base_name | dir | kind | taken_at）--");
         let mut stmt = conn
-            .prepare("SELECT base_name, dir, kind, taken_at FROM asset ORDER BY id LIMIT 12")
+            .prepare(
+                "SELECT base_name, dir, kind, taken_at FROM asset
+                 WHERE dir NOT IN ('larges','thumbs','previews')
+                 ORDER BY id LIMIT 12",
+            )
             .unwrap();
         let rows = stmt
             .query_map([], |r| {

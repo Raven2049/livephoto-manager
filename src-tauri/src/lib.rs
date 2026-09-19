@@ -13,6 +13,7 @@ mod pairing;
 mod protocol;
 mod state;
 mod thumb;
+mod time;
 
 use tauri::Manager;
 

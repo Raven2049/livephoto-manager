@@ -138,9 +138,12 @@
   `UNIQUE(dir, base_name)`；旧 v1 直接重建）；`indexer.rs` 递归扫描、跳过 `.lpm`、同目录配对、按 `dir` 归属。
 - **Phase 3（已完成）**：导入平铺到库根；数据库键用**落盘主名**，设备原名存 `src_name`/`src_serial`
   用于增量去重（`imported_sizes` + `diff_tasks(..., serial)`）；删除确认阈值改为 ≥2。
-- **验证**：`cargo test` 80 passed / 9 ignored、`clippy -D warnings`、`fmt --check`、`npm run build` 全绿。
-  **尚未**在真实相册目录（如 `D:\图片\Pictures\MI10PRO`）上跑 GUI 实测。
-- **Phase 4/5（未做）**：从文件读拍摄时间（EXIF/ffprobe，需实测）；文档收尾。
+- **Phase 4（已完成，2026-09-19）**：新增 `time.rs` 从文件读拍摄时间——静态图解析 EXIF
+  `DateTimeOriginal`（JPG/HEIC，无时区按本机时区解释为真实 epoch）、视频解析 `moov/mvhd`，
+  读不到回退文件 mtime（`taken_src` 0/1/2）；重扫时「更好的来源覆盖」且已有 meta 时间的条目跳过读文件。
+  真实目录实测：`MI10PRO`（Android JPG）与 `iPhone`（HEIC+MOV）时间正确，HEIC 与同组 MOV 一致。
+- **验证**：`cargo test` 86 passed / 10 ignored、`clippy -D warnings`、`fmt --check`、`npm run build` 全绿。
+- **Phase 5（未做）**：文档收尾。
 - 注意：旧库的 `iPhone\thumbs` 等派生目录会被当普通照片扫入（只跳过 `.lpm`），需手动清理旧库。
 
 **有意取舍（不再改，除非有需求）**：

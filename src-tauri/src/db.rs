@@ -133,10 +133,9 @@ fn split(f: &Option<FileRef>) -> (Option<String>, Option<String>, Option<i64>) {
     }
 }
 
-/// 写入/更新一个逻辑条目。业务键是 `(dir, base_name)`。
-///
-/// 冲突时不触碰 `status / error / thumb_path / preview_path / content_id / created_at`，
-/// 以保留导入阶段写入的状态与派生路径。
+/// 测试夹具：写入一个条目（`taken_src=0`）。生产代码用 `upsert_imported_asset` /
+/// `upsert_scanned_asset`。冲突时不触碰状态与派生路径列。
+#[cfg(test)]
 pub fn upsert_asset(
     conn: &Connection,
     dir: &str,
@@ -194,12 +193,13 @@ pub fn upsert_imported_asset(
     let (movie_path, movie_ext, movie_size) = split(&asset.movie);
     conn.execute(
         "INSERT INTO asset
-           (dir, base_name, kind, taken_at, still_path, still_ext, still_size,
+           (dir, base_name, kind, taken_at, taken_src, still_path, still_ext, still_size,
             movie_path, movie_ext, movie_size, integrity, src_name, src_serial, missing, created_at, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,0,?14,?14)
+         VALUES (?1,?2,?3,?4,2,?5,?6,?7,?8,?9,?10,?11,?12,?13,0,?14,?14)
          ON CONFLICT(dir, base_name) DO UPDATE SET
            kind=excluded.kind,
            taken_at=excluded.taken_at,
+           taken_src=excluded.taken_src,
            still_path=excluded.still_path,
            still_ext=excluded.still_ext,
            still_size=excluded.still_size,
@@ -231,34 +231,78 @@ pub fn upsert_imported_asset(
     Ok(())
 }
 
-/// 重扫（`indexer`）专用：同一 `(dir, base_name)` 若已有条目，沿用其 `taken_at`；
-/// 并且**保留**已验证的 integrity（1 不一致 / 2 残缺 / 5 疑似副本）——重扫只按
-/// 「文件是否在场」配对，直接覆盖会把它们抹成 0/3/4。仅当在场形态变化时才更新。
+/// 重扫（`indexer`）专用：写入扫描到的拍摄时间与完整性。
+///
+/// - 拍摄时间采用「**更好的来源覆盖**」：新 `taken_src` 更大才覆盖；旧的为 0（未知）
+///   时也允许填入。这样 mtime 日后能被 EXIF 升级，而导入写入的真实时间不会被扫描覆盖。
+/// - integrity 仅在「在场形态」不变时保留旧值（1/2/5 不被抹成 0/3/4）。
+/// - 冲突时不触碰 `status/error/thumb_path/preview_path/content_id/src_*`。
 pub fn upsert_scanned_asset(
     conn: &Connection,
     dir: &str,
     asset: &PairedAsset,
+    taken_at: i64,
+    taken_src: i64,
 ) -> rusqlite::Result<()> {
-    let existing: Option<(i64, i64)> = conn
+    let existing: Option<(i64, i64, i64)> = conn
         .query_row(
-            "SELECT taken_at, integrity FROM asset WHERE dir = ?1 AND base_name = ?2",
+            "SELECT taken_at, integrity, taken_src FROM asset WHERE dir = ?1 AND base_name = ?2",
             params![dir, asset.base_name],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?;
-    let (taken_at, old_integrity) = match existing {
-        Some((t, i)) => (t, Some(i)),
-        None => (0, None),
-    };
-    let keep =
-        old_integrity.is_some_and(|old| presence_shape(old) == presence_shape(asset.integrity));
-    let mut merged = asset.clone();
-    if keep {
-        if let Some(old) = old_integrity {
-            merged.integrity = old;
+
+    let mut keep_taken = taken_at;
+    let mut keep_src = taken_src;
+    let mut keep_integrity = asset.integrity;
+    if let Some((et, ei, es)) = existing {
+        if presence_shape(ei) == presence_shape(asset.integrity) {
+            keep_integrity = ei;
+        }
+        // 更好的来源覆盖；旧的未知（taken_at=0）也允许填入。
+        if !(taken_src > es || et == 0) {
+            keep_taken = et;
+            keep_src = es;
         }
     }
-    upsert_asset(conn, dir, &merged, taken_at)
+
+    let (still_path, still_ext, still_size) = split(&asset.still);
+    let (movie_path, movie_ext, movie_size) = split(&asset.movie);
+    conn.execute(
+        "INSERT INTO asset
+           (dir, base_name, kind, taken_at, taken_src, still_path, still_ext, still_size,
+            movie_path, movie_ext, movie_size, integrity, missing, created_at, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13,?13)
+         ON CONFLICT(dir, base_name) DO UPDATE SET
+           kind=excluded.kind,
+           taken_at=excluded.taken_at,
+           taken_src=excluded.taken_src,
+           still_path=excluded.still_path,
+           still_ext=excluded.still_ext,
+           still_size=excluded.still_size,
+           movie_path=excluded.movie_path,
+           movie_ext=excluded.movie_ext,
+           movie_size=excluded.movie_size,
+           integrity=excluded.integrity,
+           missing=0,
+           updated_at=excluded.updated_at",
+        params![
+            dir,
+            asset.base_name,
+            asset.kind,
+            keep_taken,
+            keep_src,
+            still_path,
+            still_ext,
+            still_size,
+            movie_path,
+            movie_ext,
+            movie_size,
+            keep_integrity,
+            now_epoch(),
+        ],
+    )?;
+    Ok(())
 }
 
 /// integrity 的「在场形态」：3 = 仅静态，4 = 仅视频，其余（0/1/2/5）都建立在两侧在场之上。
@@ -359,6 +403,17 @@ pub fn set_preview_path(
         params![preview_path, now_epoch(), asset_id],
     )?;
     Ok(())
+}
+
+/// 已有「元数据来源」拍摄时间的条目键 `(dir, base_name)`，供重扫跳过重复读文件。
+pub fn assets_with_meta_time(
+    conn: &Connection,
+) -> rusqlite::Result<std::collections::HashSet<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT dir, base_name FROM asset WHERE taken_src >= ?1")?;
+    let rows = stmt.query_map(params![crate::time::SRC_META], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
+    rows.collect()
 }
 
 /// 已导入条目的大小映射：`(src_serial, src_name) -> (still_size, movie_size)`。
@@ -1021,7 +1076,7 @@ mod tests {
         seed(&conn, "IMG_1", 12345, KIND_PHOTO, 3);
 
         let a = sample_asset("IMG_1");
-        upsert_scanned_asset(&conn, "", &a).unwrap();
+        upsert_scanned_asset(&conn, "", &a, 0, 0).unwrap();
 
         let n: i64 = conn
             .query_row("SELECT count(*) FROM asset", [], |r| r.get(0))
@@ -1056,7 +1111,7 @@ mod tests {
         set_integrity(&conn, "", "IMG_1", 1).unwrap();
 
         // 重扫：在场形态不变 → 保留 1。
-        upsert_scanned_asset(&conn, "", &live).unwrap();
+        upsert_scanned_asset(&conn, "", &live, 0, 0).unwrap();
         let i: i64 = conn
             .query_row("SELECT integrity FROM asset", [], |r| r.get(0))
             .unwrap();
@@ -1074,7 +1129,7 @@ mod tests {
             }),
             movie: None,
         };
-        upsert_scanned_asset(&conn, "", &still_only).unwrap();
+        upsert_scanned_asset(&conn, "", &still_only, 0, 0).unwrap();
         let i: i64 = conn
             .query_row("SELECT integrity FROM asset", [], |r| r.get(0))
             .unwrap();
