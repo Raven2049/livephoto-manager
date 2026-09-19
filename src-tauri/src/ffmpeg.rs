@@ -161,6 +161,33 @@ pub fn view_args(input: &Path, output: &Path) -> Vec<String> {
     ]
 }
 
+/// 单张查看里播放实况/视频用的代理：H.264、最长边 ≤1920、**静音**（裁剪版无 aac 编码器）。
+/// `-faststart` 便于快速起播。
+pub fn view_video_args(input: &Path, output: &Path) -> Vec<String> {
+    vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-y".into(),
+        "-i".into(),
+        input.to_string_lossy().into_owned(),
+        "-vf".into(),
+        "scale=w='min(1920,iw)':h=-2".into(),
+        "-an".into(),
+        "-c:v".into(),
+        "libx264".into(),
+        "-crf".into(),
+        "26".into(),
+        "-preset".into(),
+        "veryfast".into(),
+        "-movflags".into(),
+        "+faststart".into(),
+        "-f".into(),
+        "mp4".into(),
+        output.to_string_lossy().into_owned(),
+    ]
+}
+
 /// 与 ffmpeg 同目录的 ffprobe。
 pub fn find_ffprobe() -> anyhow::Result<PathBuf> {
     let ff = find_ffmpeg()?;
@@ -268,6 +295,15 @@ mod tests {
         assert!(a.contains(&"-frames:v".to_string()));
         assert!(!a.iter().any(|x| x.starts_with("scale=")), "查看图不缩放");
         assert_eq!(a.last().unwrap(), "out.webp.part");
+    }
+
+    #[test]
+    fn view_video_args_are_h264_muted_faststart() {
+        let a = view_video_args(Path::new("in.mov"), Path::new("out.mp4.part"));
+        assert!(a.contains(&"libx264".to_string()));
+        assert!(a.contains(&"-an".to_string()));
+        assert!(a.contains(&"+faststart".to_string()));
+        assert_eq!(a.last().unwrap(), "out.mp4.part");
     }
 
     #[test]

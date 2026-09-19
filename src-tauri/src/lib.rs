@@ -72,6 +72,7 @@ pub fn run() {
             commands::ensure_preview,
             commands::ensure_large,
             commands::ensure_view,
+            commands::ensure_view_video,
             commands::classify_library,
             commands::export_diagnostics,
             commands::export_assets,

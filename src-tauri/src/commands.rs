@@ -765,6 +765,36 @@ pub async fn ensure_view(
     .map_err(|e| format!("{e:#}"))
 }
 
+/// 确保某条目「单张查看里播放」用的 H.264 代理存在；返回其绝对路径。
+/// 只对视频/实况（有 movie_path）有效；完整时长、静音。
+#[tauri::command]
+pub async fn ensure_view_video(
+    asset_id: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let root = state.library_root().ok_or_else(|| "库未打开".to_string())?;
+
+    tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<String> {
+        let lib = Library::open(&root)?;
+        let conn = crate::db::open(&lib.db_path())?;
+        let files = crate::db::assets_by_ids(&conn, &[asset_id])?;
+        let f = files
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("条目不存在"))?;
+        let source = f
+            .movie_path
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("该条目没有视频"))?;
+        let bin = crate::ffmpeg::find_ffmpeg()?;
+        let p = crate::thumb::make_view_video(&bin, Path::new(&source), &lib.view_tmp_dir())?;
+        Ok(p.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:#}"))
+}
+
 /// 确保某条目的高分大图存在（单列浏览用）；返回其绝对路径。
 /// 源优先静态图，其次视频首帧；由 ffmpeg 生成 WebP 并缓存。
 #[tauri::command]

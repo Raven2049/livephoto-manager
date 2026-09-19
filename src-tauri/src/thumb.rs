@@ -135,6 +135,31 @@ pub fn view_file_name(hash: &str) -> String {
     format!("{hash}.webp")
 }
 
+/// 单张查看里播放用的代理文件名：`<hash>-v.mp4`。
+pub fn view_video_file_name(hash: &str) -> String {
+    format!("{hash}-v.mp4")
+}
+
+/// 生成/复用「单张查看」里播放实况/视频用的 H.264 代理（完整时长、静音、临时缓存）。
+pub fn make_view_video(ffmpeg_bin: &Path, input: &Path, view_dir: &Path) -> Result<PathBuf> {
+    std::fs::create_dir_all(view_dir)?;
+    let out = view_dir.join(view_video_file_name(&content_hash(input)?));
+    if out.is_file() {
+        return Ok(out);
+    }
+    let mut tmp = out.clone().into_os_string();
+    tmp.push(".part");
+    let tmp = PathBuf::from(tmp);
+
+    if let Err(e) = ffmpeg::run(ffmpeg_bin, &ffmpeg::view_video_args(input, &tmp)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    std::fs::rename(&tmp, &out)?;
+    prune_view_cache(view_dir, VIEW_CACHE_MAX_BYTES);
+    Ok(out)
+}
+
 /// 单张查看缓存总量上限（超出按最旧清理）。
 const VIEW_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
