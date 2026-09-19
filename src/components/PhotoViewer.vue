@@ -215,7 +215,9 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
       @pointerup="onPointerUp"
       @pointercancel="onPointerUp"
     >
-      <div v-if="loading" class="v-msg">正在生成大图…</div>
+      <div v-if="loading" class="v-msg">
+        <span class="spinner" aria-hidden="true"></span>正在生成大图…
+      </div>
       <div v-else-if="failed" class="v-msg">无法显示这张图</div>
 
       <!-- 播放实况/视频（静音 H.264 代理） -->
@@ -314,8 +316,24 @@ onBeforeUnmount(() => document.removeEventListener("keydown", onKey));
   -webkit-user-drag: none;
 }
 .v-msg {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   color: rgba(255, 255, 255, 0.75);
   font-size: 14px;
+}
+.spinner {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .v-video {
   max-width: 100%;

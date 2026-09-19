@@ -156,7 +156,7 @@ const activeCount = computed(
 }
 .popover {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 8px);
   right: 0;
   z-index: 30;
   width: 300px;
@@ -165,6 +165,19 @@ const activeCount = computed(
   border: 1px solid var(--separator);
   border-radius: 14px;
   box-shadow: var(--shadow);
+}
+/* 小箭头指向触发按钮（HIG popovers：arrow points at the element that revealed it） */
+.popover::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  right: 20px;
+  width: 10px;
+  height: 10px;
+  background: var(--card);
+  border-left: 1px solid var(--separator);
+  border-top: 1px solid var(--separator);
+  transform: rotate(45deg);
 }
 .pop-title {
   font-size: 11px;

@@ -1231,8 +1231,9 @@ const filtersActive = computed(
   font-weight: 650;
   letter-spacing: -0.01em;
   color: var(--label);
-  background: linear-gradient(180deg, var(--bg) 72%, transparent);
-  backdrop-filter: blur(6px);
+  /* 半透明材质带：内容从下方滚过时仍可读（scroll-views：scroll edge effect 只用于控件与内容交界） */
+  background: linear-gradient(180deg, var(--bg) 55%, color-mix(in srgb, var(--bg) 60%, transparent) 80%, transparent);
+  backdrop-filter: blur(10px) saturate(140%);
 }
 
 /* 状态 HUD：右下角浮层，不参与工具栏布局，数字变化不影响其它控件 */
