@@ -52,8 +52,9 @@ function onTileEnter(cell: TileCell, e: MouseEvent) {
 }
 
 function pathOf(a: AssetRow): string {
-  // 单列流若已生成高清大图则优先用它，否则退回缩略图/原图。
-  return props.largeById[a.id] || ((a.thumb_path || a.still_path) as string);
+  // 网格只加载缩略图（单列流优先高清大图）；没有就显示占位，**绝不**退回原始大图
+  // ——已有相册里动辄 10MB 的原图会让网格卡死（缩略图会自动补，见 loading.md 占位）。
+  return props.largeById[a.id] || a.thumb_path || "";
 }
 
 /** 通知父组件为当前可见条目按需生成高清大图（仅单列流）。 */
@@ -332,7 +333,14 @@ const effectiveColumns = computed(() => (props.masonry ? 1 : Math.max(1, props.c
 // 瓦片边长由列数与容器宽算出（固定尺寸，便于虚拟化）
 const tileW = computed(() => {
   const cols = effectiveColumns.value;
-  return Math.floor((viewportW.value - props.gap * (cols + 1)) / cols);
+  // 横向铺满：只保留列间 gap，不留外侧边距（整除余数交给 buildLayout 分配到列间）。
+  return Math.max(1, Math.floor((viewportW.value - props.gap * (cols - 1)) / cols));
+});
+/** 整除余数（0 ≤ r < cols）：按 1px 分摊到前面几列的列间，使整行正好铺满、左右贴边。 */
+const tileRemainder = computed(() => {
+  const cols = effectiveColumns.value;
+  const used = cols * tileW.value + props.gap * (cols - 1);
+  return Math.max(0, viewportW.value - used);
 });
 const tileStride = computed(() => (tileW.value < 1 ? 1 : tileW.value) + props.gap);
 
@@ -343,6 +351,7 @@ const layout = computed(() =>
     effectiveColumns.value,
     tileW.value,
     props.gap,
+    tileRemainder.value,
     props.hasMore,
     hh.value,
     props.masonry,
@@ -369,6 +378,7 @@ function markVisibleLoaded() {
 }
 
 function tileSrc(index: number, path: string): string {
+  if (!path) return PLACEHOLDER;
   return settled.value || loaded.has(index) ? lpmUrl(path) : PLACEHOLDER;
 }
 
@@ -559,8 +569,10 @@ function restoreAnchor(anchor: Anchor | null) {
   const y = layout.value.indexToY(anchor.index);
   const h = layout.value.indexHeight(anchor.index);
   const dest = Math.max(0, y + anchor.fy * h - anchor.viewportY);
-  // 平滑滑到锚点，避免换挡时生硬跳动（交给原生平滑滚动）。
-  el.scrollTo({ top: dest, behavior: "smooth" });
+  // 换挡会让同一张图落在很远处（列数变化大时 y 可差上百倍）：大跨度**直接定位**，
+  // 否则原生长距离平滑滚动会耗时过久（motion.md：不要让用户被迫等待动画）。小跨度仍平滑。
+  const far = Math.abs(dest - el.scrollTop) > el.clientHeight * 2;
+  el.scrollTo({ top: dest, behavior: far ? "auto" : "smooth" });
 }
 
 let ro: ResizeObserver | null = null;

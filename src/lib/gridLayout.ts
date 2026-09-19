@@ -54,6 +54,7 @@ export function buildLayout(
   columns: number,
   tileW: number,
   gap: number,
+  remainder: number,
   hasMore: boolean,
   headerH: number,
   masonry: boolean,
@@ -83,7 +84,7 @@ export function buildLayout(
       let cy = contentTop;
       for (const a of g.assets) {
         const h = Math.max(1, Math.round(size * aspectRatio(a)));
-        const cell: TileCell = { asset: a, index, x: gap, y: cy, w: size, h };
+        const cell: TileCell = { asset: a, index, x: 0, y: cy, w: size, h };
         rows.push({ type: "tiles", key: `${g.key}#${index}`, y: cy, h, cells: [cell] });
         indexY[index] = cy;
         indexH[index] = h;
@@ -103,7 +104,8 @@ export function buildLayout(
           cells.push({
             asset: g.assets[i],
             index: index + i,
-            x: gap + c * (size + gap),
+            // 余数按 1px 分配到前面的列间，横向铺满、左右贴边（否则全堆在右侧）。
+            x: c * (size + gap) + Math.min(c, remainder),
             y: cy,
             w: size,
             h: size,

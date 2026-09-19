@@ -169,7 +169,7 @@ const pv = usePreview(videoEl);
 const hoverRect = ref<{ x: number; y: number; w: number; h: number } | null>(null);
 
 const gridAssets = computed<AssetRow[]>(() =>
-  lib.assets.filter((a) => !a.missing && (a.thumb_path || a.still_path)),
+  lib.assets.filter((a) => !a.missing && (a.thumb_path || a.still_path || a.movie_path)),
 );
 
 const gran = computed<Granularity>(() =>
@@ -276,23 +276,23 @@ function preventContextMenu(e: MouseEvent) {
   e.preventDefault();
 }
 
-/* ---------- 侧栏「更多」菜单 ---------- */
+/* ---------- 侧栏下拉菜单（「更多」与「资料库」共用逻辑） ---------- */
 const menuOpen = ref(false);
 const menuEl = ref<HTMLElement | null>(null);
+const libMenuOpen = ref(false);
+const libMenuEl = ref<HTMLElement | null>(null);
 
-function menuItems(): HTMLButtonElement[] {
-  return Array.from(
-    menuEl.value?.querySelectorAll<HTMLButtonElement>(".menu-item:not(:disabled)") ?? [],
-  );
+function itemsIn(el: HTMLElement | null): HTMLButtonElement[] {
+  return Array.from(el?.querySelectorAll<HTMLButtonElement>(".menu-item:not(:disabled)") ?? []);
 }
-/** 打开菜单时聚焦第一项；方向键在项间移动，Esc 关闭（menus.md / focus-and-selection.md）。 */
-watch(menuOpen, async (open) => {
-  if (!open) return;
+/** 打开任一菜单时聚焦其第一项；方向键在项间移动，Esc 关闭（menus.md / focus-and-selection.md）。 */
+watch([menuOpen, libMenuOpen], async ([m, l]) => {
+  if (!m && !l) return;
   await nextTick();
-  menuItems()[0]?.focus();
+  itemsIn(m ? menuEl.value : libMenuEl.value)[0]?.focus();
 });
 function onMenuKeydown(e: KeyboardEvent) {
-  const items = menuItems();
+  const items = itemsIn(e.currentTarget as HTMLElement | null);
   if (!items.length) return;
   const cur = items.indexOf(document.activeElement as HTMLButtonElement);
   if (e.key === "ArrowDown") {
@@ -309,7 +309,7 @@ function onMenuKeydown(e: KeyboardEvent) {
     items[items.length - 1]?.focus();
   } else if (e.key === "Escape") {
     e.preventDefault();
-    menuOpen.value = false;
+    closeMenus();
   }
 }
 const granOptions: { label: string; value: "auto" | "year" | "month" | "day" }[] = [
@@ -318,17 +318,33 @@ const granOptions: { label: string; value: "auto" | "year" | "month" | "day" }[]
   { label: "月", value: "month" },
   { label: "天", value: "day" },
 ];
-function runMenu(fn: () => unknown) {
+function closeMenus() {
   menuOpen.value = false;
+  libMenuOpen.value = false;
+}
+function runMenu(fn: () => unknown) {
+  closeMenus();
   void fn();
 }
-function onDocClick() {
+/** 切换资料库：关菜单后打开（最近库列表来自 `lib.recents`）。 */
+function runOpenRecent(path: string) {
+  libMenuOpen.value = false;
+  void openRecent(path);
+}
+function copyLibraryPath() {
+  if (lib.root) void copyText(lib.root);
+}
+function toggleLibMenu() {
   menuOpen.value = false;
+  libMenuOpen.value = !libMenuOpen.value;
+}
+function onDocClick() {
+  closeMenus();
   ctx.value = null;
 }
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
-    menuOpen.value = false;
+    closeMenus();
     ctx.value = null;
   }
 }
@@ -399,7 +415,7 @@ const classifyPct = computed(() => {
 type ActiveTask =
   | { kind: "import"; pct: number; text: string; right: string; cancellable: true }
   | { kind: "scan"; pct: number | null; text: string; right: string; cancellable: true }
-  | { kind: "thumbs"; pct: number; text: string; right: string; cancellable: false }
+  | { kind: "thumbs"; pct: number; text: string; right: string; cancellable: true }
   | { kind: "classify"; pct: number; text: string; right: string; cancellable: true }
   | { kind: "busy"; pct: number | null; text: string; right: string; cancellable: false };
 
@@ -440,7 +456,7 @@ const activeTask = computed<ActiveTask | null>(() => {
       pct: thumbPct.value,
       text: `缩略图 ${lib.thumbs.done}/${lib.thumbs.total}`,
       right: lib.thumbs.failed ? `失败 ${lib.thumbs.failed}` : "",
-      cancellable: false,
+      cancellable: true,
     };
   }
   if (lib.busy) {
@@ -455,6 +471,7 @@ function cancelActive() {
   if (t.kind === "import") imp.stop();
   else if (t.kind === "scan") lib.cancelScan();
   else if (t.kind === "classify") lib.cancelScan();
+  else if (t.kind === "thumbs") lib.cancelScan();
 }
 
 const stats = computed(() => lib.stats);
@@ -571,6 +588,9 @@ const filtersActive = computed(
           <button class="menu-item" :disabled="!lib.root" @click="runMenu(exportDiag)">
             导出诊断报告…
           </button>
+          <button class="menu-item" :disabled="!lib.root" @click="runMenu(copyLibraryPath)">
+            复制库路径
+          </button>
           <div class="menu-sep"></div>
           <div class="menu-label">时间线分段</div>
           <button
@@ -588,15 +608,45 @@ const filtersActive = computed(
       <div class="sec">
         <div class="sec-title">资料库</div>
         <div class="card">
-          <button
-            class="libpath"
-            :title="lib.root ? '点击复制路径' : ''"
-            :disabled="!lib.root"
-            @click="lib.root && copyText(lib.root)"
-          >
-            <AppIcon name="folder" :size="14" />
-            <span>{{ lib.root || "未打开资料库" }}</span>
-          </button>
+          <div class="lib-switch">
+            <button
+              class="libpath"
+              :title="lib.root || ''"
+              :disabled="!lib.root || lib.busy"
+              :aria-expanded="libMenuOpen"
+              aria-haspopup="menu"
+              @click.stop="toggleLibMenu"
+            >
+              <AppIcon name="folder" :size="14" />
+              <span class="lib-path-text">{{ lib.root || "未打开资料库" }}</span>
+              <AppIcon name="chevron" :size="12" class="lib-chevron" />
+            </button>
+            <div
+              v-if="libMenuOpen"
+              ref="libMenuEl"
+              class="lib-menu"
+              role="menu"
+              tabindex="-1"
+              @click.stop
+              @keydown="onMenuKeydown"
+            >
+              <div v-if="lib.recents.length" class="menu-label">最近</div>
+              <button
+                v-for="r in lib.recents"
+                :key="r.path"
+                class="menu-item"
+                :disabled="!r.exists || lib.busy"
+                @click="runOpenRecent(r.path)"
+              >
+                <span class="menu-check">{{ r.path === lib.root ? "✓" : "" }}</span>
+                <span class="lib-item-text">{{ r.name }}</span>
+              </button>
+              <div v-if="lib.recents.length" class="menu-sep"></div>
+              <button class="menu-item" :disabled="lib.busy" @click="runMenu(pickLibrary)">
+                打开其他资料库…
+              </button>
+            </div>
+          </div>
           <button class="btn block" style="margin-top: 10px" @click="pickLibrary">
             打开资料库…
           </button>
@@ -1162,7 +1212,7 @@ const filtersActive = computed(
 .libpath {
   display: flex;
   gap: 7px;
-  align-items: flex-start;
+  align-items: center;
   width: 100%;
   background: none;
   border: 0;
@@ -1170,15 +1220,50 @@ const filtersActive = computed(
   text-align: left;
   font-size: 12px;
   color: var(--label-2);
-  word-break: break-all;
   line-height: 1.35;
   cursor: pointer;
+}
+/* 路径单行省略：换库时高度不变，箭头位置稳定（layout.md：内容位置可预测） */
+.lib-path-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .libpath:hover:not(:disabled) {
   color: var(--label);
 }
 .libpath:disabled {
   cursor: default;
+}
+/* 资料库切换菜单：锚在路径按钮下方，复用 .menu-item/.menu-sep/.menu-label 样式 */
+.lib-switch {
+  position: relative;
+}
+.libpath .lib-chevron {
+  margin-left: auto;
+  flex: none;
+  color: var(--label-2);
+}
+.lib-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--separator);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  z-index: 40;
+}
+.lib-item-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .stats {
   display: grid;

@@ -117,9 +117,9 @@
 - **可访问性（P0）**：导入开关改原生 `role=switch`（可 Tab/空格、有语义，`App.vue`）；小号文字由
   `--label-3` 提升到 `--label-2`，并新增 `prefers-contrast: more` 覆盖（`app.css`）；错误 toast 不再
   自动消失、点击关闭（`App.vue`）。依据 `accessibility.md:51/89/96`。
-- **安全收紧**：`lpm://` 白名单收窄为 `originals/thumbs/previews/larges/.lpm/view` + 媒体扩展名，
-  显式拒绝 `.lpm/index.db` 与 `diagnostics-*.txt`（`protocol.rs`）；`open_library` 拒绝盘根与系统目录
-  （`commands.rs`）。CSP 仍未配置（见「待定」）。
+- **安全收紧**：`open_library` 拒绝盘根与系统目录（`commands.rs`）；`lpm://` 仅提供媒体扩展名。
+  （该轮曾把白名单收窄为 `originals/thumbs/previews/larges/.lpm/view`；**平铺库重构后已改为
+  库根递归 + 媒体扩展名**，见下节。）CSP 仍未配置（见「待定」）。
 - **integrity 持久化**：重扫不再抹掉已验证分类（1/2/5），仅在场形态变化时覆盖
   （`db.rs::upsert_asset_preserving_taken_at`）；`校验标识` 新增 `assume_cloud` 参数，使 `integrity=5`
   可达（`commands.rs::classify_library`；前端复用侧栏「原件可能不在手机」开关）。
@@ -142,6 +142,14 @@
   `DateTimeOriginal`（JPG/HEIC，无时区按本机时区解释为真实 epoch）、视频解析 `moov/mvhd`，
   读不到回退文件 mtime（`taken_src` 0/1/2）；重扫时「更好的来源覆盖」且已有 meta 时间的条目跳过读文件。
   真实目录实测：`MI10PRO`（Android JPG）与 `iPhone`（HEIC+MOV）时间正确，HEIC 与同组 MOV 一致。
+- **后续打磨（2026-09-19）**（都在 `dev`，随本轮一并提交）：
+  - 网格**不再加载原图**（无缩略图只显示占位、生成后就地填充）——否则首次打开已有相册会因加载 10MB 级原图而卡死；
+  - 缩略图回填**多线程**（`min(核数,4)` worker，结果回主线程串行写库；单张约 JPG 260ms / HEIC 580ms，串行太慢）；
+  - ffmpeg 以 `BELOW_NORMAL_PRIORITY_CLASS` 运行、缩略图进度节流上报（每 25 张）且**可取消**；
+  - 换挡锚点：大跨度（>2 视口）**直接定位**，不再原生长距离平滑滚动；
+  - 侧栏「资料库」路径行改为 **pop-up 菜单**（最近库 + 打开其他；`pull-down-buttons.md:25` 选择/动作分离）；
+  - 网格横向**铺满**（去掉外侧边距、把 `floor` 余数按 1px 分摊到列间），左右贴边、消除右侧宽缝；
+  - 库切换箭头改内联 SVG 且不再开合旋转（位置稳定）。
 - **验证**：`cargo test` 86 passed / 10 ignored、`clippy -D warnings`、`fmt --check`、`npm run build` 全绿。
 - **Phase 5（未做）**：文档收尾。
 - 注意：旧库的 `iPhone\thumbs` 等派生目录会被当普通照片扫入（只跳过 `.lpm`），需手动清理旧库。
@@ -172,7 +180,7 @@
   销毁重建，丢失解码器状态，等于每个格子都换一个新 video——正好毁掉这个设计的全部意义。
 - 预览片由浏览界面**按需生成**（`ensure_preview`），**不要**把它塞回导入管道。
 - 预览片与缩略图都用**内容哈希**命名，内容相同的条目自动复用同一个文件（实测生效）。
-- `previews/` 与 `thumbs/` 都在库内、走 `lpm://`（库根已作为允许根）。
+- `previews/` 与 `thumbs/` 都在隐藏的 `.lpm/` 内、走 `lpm://`（库根为允许根）。
 - 前端有 `token` 机制丢弃过期的异步结果：悬停 A 未完成就切到 B 时，A 的结果不能覆盖 B 的画面。
 
 **计划 4 遗留（动手前必读 `notes/2026-09-17-import-smoke.md`）：**
@@ -270,14 +278,14 @@
 - Rust `1.98.1`（`cargo` / `clippy 0.1.98` / `rustfmt 1.9.0`）
 - Windows SDK `10.0.26100`，头文件在
   `C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um\PortableDevice.h`
-- ffmpeg `9.0.1-full_build`（gyan.dev），路径：
-  `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build\bin\ffmpeg.exe`
-- 跑冒烟测试**和** `npm run tauri dev` 前都必须设 `$env:LIVEPORTER_FFMPEG` 指向上面这个路径，
+- ffmpeg `9.0.1-essentials_build`（gyan.dev，winget 包 `Gyan.FFmpeg.Essentials`），路径：
+  `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg.Essentials_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-essentials_build\bin\ffmpeg.exe`
+- 跑冒烟测试**和** `npm run tauri dev` 前都必须设 `$env:LIVEPORTER_FFMPEG` 指向该 ffmpeg.exe，
   否则生成缩略图/预览片会报「未找到 ffmpeg.exe」（`ffmpeg::find_ffmpeg` 只查环境变量、
   主程序同目录、同目录 `resources/`，**不查 PATH**）
 
-**注意**：阶段 4 的实测记录用的是 `9.0.1-**essentials**_build`，本机装的是 `full_build`（超集）。
-两者都含 `libwebp` / `libx264` / `hevc`，已实测冒烟通过。
+> 打包分发的**裁剪版** ffmpeg 另在仓库外 `C:\Users\Raven\ffmpeg-build\out\bin`（阶段 8 产物，
+> 其 SHA-256 记录在 `scripts/ffmpeg.sha256`）。开发期用上面的 winget essentials 版即可。
 
 ## 需要安装的 skills（全局，不在仓库内）
 
@@ -318,9 +326,10 @@ livephoto-manager/
 ├── crates/probe/                 阶段 0：WPD 只读探测程序
 ├── src-tauri/                    阶段 1 起：Tauri 核心（Rust）
 │   └── src/
-│       ├── db.rs                 SQLite 索引
-│       ├── library.rs            库目录结构与路径
-│       ├── indexer.rs            扫描 originals/ 建索引
+│       ├── db.rs                 SQLite 索引（schema v2：按 (dir, base_name)）
+│       ├── library.rs            库结构与隐藏 `.lpm/` 路径
+│       ├── indexer.rs            递归扫描库根、同目录配对、读拍摄时间
+│       ├── time.rs               从 EXIF/mvhd/mtime 读拍摄时间
 │       ├── importer.rs           导入管道（状态机 + 断点续传）
 │       ├── pairing.rs            主名配对
 │       ├── device/               WPD 访问（keys.rs / transfer.rs）

@@ -14,6 +14,7 @@ const PATHS: Record<string, string> = {
   check: '<path d="m5 13 4 4L19 7"/>',
   warn: '<path d="M12 3 2 21h20z"/><path d="M12 10v5"/><path d="M12 18h.01"/>',
   play: '<path d="M7 4v16l13-8z"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
 };
 </script>
 
