@@ -99,6 +99,15 @@
 - **HIG 中优先**：筛选气泡带箭头（`popovers.md`）、查看器加载转圈、分段条改半透明材质带
 - **功能缺口**：单击看大图 + 滚轮锚点缩放/拖拽（设计 §7.1）、顶部固定分段条 —— 完成
 
+**HIG 审查结论：不做自绘标题栏**（2026-09-19）
+- 依据：`windows.md`「**No custom window UI** — system windows look and behave as people expect.
+  Custom frames or controls that imperfectly match system look/behavior make the app feel broken.」
+  `going-full-screen.md`「Use the system-provided full-screen experience… Avoid custom window-mode menus.」
+- 自绘标题栏还会丢掉 Windows 原生行为：贴边分屏（Aero Snap）、悬停最大化的 Snap Layouts、
+  拖动到屏幕顶最大化、标题栏右键系统菜单、高对比度/系统主题、DPI 缩放、键盘可达性。
+- 结论：**保留原生窗口边框与系统标题栏**。若只是想弱化标题栏观感，可走低风险折中：
+  设置窗口主题/标题栏颜色（DWM），而不是自绘控件。
+
 **有意取舍（不再改，除非有需求）**：
 - 搜索防抖 250ms（非 `search-fields.md` 的逐键搜索；本地 SQLite 查询足够快，防抖避免频繁重查）
 - 删除确认框「删除」仍用红色 destructive 样式（`alerts.md` 说主动删除可不标红；保留更稳妥）
@@ -170,6 +179,8 @@
 
 ## 工作流要求
 
+- **所有 UI/UX 改动必须先过 HIG 审查**（用全局 `apple-hig` skill）：先明确引用到哪几条规范、结论是什么、
+  有无取舍，**过审后再动手**；未过审不要直接改界面。
 - **分支**：开发在 `dev` 分支；`main` 只收已完成的里程碑
 - **复杂改动先给方案**（改哪些文件、为什么、有无更小方案），确认后再动手
 - **改完必跑验证并如实报告**：`cargo test`、`cargo clippy -- -D warnings`、`cargo fmt --check`
