@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="lpm-bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3A3A3C"/>
+      <stop offset="1" stop-color="#1C1C1E"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="228" fill="url(#lpm-bg)"/>
+  <path fill="none" stroke="#FFFFFF" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"
+    d="M228 668 C340 646 408 616 460 572 C530 510 568 436 512 402 C448 364 380 434 428 502 C478 572 562 586 652 562 C728 542 802 492 886 424 M744 406 C800 388 852 398 894 424 C864 466 840 514 822 560"/>
+</svg>

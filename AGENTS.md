@@ -228,7 +228,7 @@
 
 ## 需要安装的 skills（全局，不在仓库内）
 
-本项目的开发依赖以下 5 个 agent skill。它们装在用户级目录（Windows 上是 `~\.agents\skills\`），**换机器需要重装**：
+本项目的开发依赖以下 6 个 agent skill。它们装在用户级目录（Windows 上是 `~\.agents\skills\`），**换机器需要重装**：
 
 ```bash
 npx skills add apollographql/skills@rust-best-practices -g -y
@@ -236,10 +236,22 @@ npx skills add wshobson/agents@rust-async-patterns -g -y
 npx skills add digitalsamba/claude-code-video-toolkit@ffmpeg -g -y
 npx skills add nodnarbnitram/claude-code-extensions@tauri-v2 -g -y
 npx skills add justinwetch/higagentskills@apple-hig -g -y
+npx skills add jkc66/custom-icons-skill@custom-icons -g -y
 ```
 
 其中 `apple-hig` 用于界面设计规范；**本项目只取其经典 HIG 部分，明确排除 iOS 26+ 的 Liquid Glass**
-（见「已定的关键约束」）。
+（见「已定的关键约束」）。`custom-icons` 用于应用图标设计（见下）。第三方小仓库**只当参考**。
+
+## 应用图标
+
+- **源文件**：`src-tauri/app-icon.svg`（一笔连笔箭头：起笔 → 打圈 → 甩出 → V 形箭头；浅底墨线）。
+  设计遵 `custom-icons` skill 的 native-vector 分支 + `apple-hig` 的 `app-icons.md`（1024²、满幅、无文字）。
+- **生成图标集**：把 SVG 渲染成 1024² 透明 PNG（本机用无头 Edge：
+  `msedge --headless=new --default-background-color=00000000 --window-size=1024,1024 --screenshot=...`，
+  见 workspace 里的 `render.ps1`），再 `npx tauri icon src-tauri/app-icon.png`。
+  **PNG 与 `icons/` 均已提交**，正常构建不需要再渲染。
+- **备选方案**：`docs/mockups/icons/`（`n-loop-dark` 等；当前用 M 浅底）。
+- 校验脚本：`custom-icons` 的 `scripts/validate_icon.py`（SVG 结构 + PNG 透明圆角）。
 
 其中 `tauri-v2` 的来源仓库 star 数很少，**只当参考，不当事实来源**；Tauri 2 的 API 以官方文档为准。
 
