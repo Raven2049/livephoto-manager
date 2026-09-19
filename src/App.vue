@@ -8,6 +8,7 @@ import { usePreview } from "./composables/usePreview";
 import { useZoom } from "./composables/useZoom";
 import { groupAssets, granularityForColumns, type Granularity } from "./lib/timeline";
 import PhotoGrid from "./components/PhotoGrid.vue";
+import PhotoViewer from "./components/PhotoViewer.vue";
 import FilterBar from "./components/FilterBar.vue";
 import AppIcon from "./components/AppIcon.vue";
 
@@ -201,6 +202,19 @@ function onSetSelected(id: number, value: boolean) {
   lib.setSelection([id], value);
 }
 
+/* ---------- 顶部固定分段条 ---------- */
+const section = ref<{ label: string; pinned: boolean }>({ label: "", pinned: false });
+
+/* ---------- 单张查看 ---------- */
+const viewerIndex = ref<number | null>(null);
+function openViewer(id: number) {
+  const i = gridAssets.value.findIndex((a) => a.id === id);
+  if (i < 0) return;
+  pv.hide();
+  hoverRect.value = null;
+  viewerIndex.value = i;
+}
+
 const slotStyle = computed(() => {
   const r = hoverRect.value;
   if (!r) return {};
@@ -239,6 +253,13 @@ function onWheel(e: WheelEvent) {
 }
 /** 全局禁止原生拖拽（图片/链接/文本），需要拖拽的交互再单独放行。 */
 function preventDrag(e: DragEvent) {
+  e.preventDefault();
+}
+
+/** 全局禁用原生右键菜单；仅文本输入/可编辑区域放行（复制粘贴需要）。 */
+function preventContextMenu(e: MouseEvent) {
+  const t = e.target as HTMLElement | null;
+  if (t?.closest("input, textarea, [contenteditable='true']")) return;
   e.preventDefault();
 }
 
@@ -330,12 +351,14 @@ async function forgetRecent(path: string) {
 
 onMounted(() => {
   document.addEventListener("dragstart", preventDrag);
+  document.addEventListener("contextmenu", preventContextMenu);
   document.addEventListener("click", onDocClick);
   document.addEventListener("keydown", onKeydown);
   void lib.loadRecents();
 });
 onBeforeUnmount(() => {
   document.removeEventListener("dragstart", preventDrag);
+  document.removeEventListener("contextmenu", preventContextMenu);
   document.removeEventListener("click", onDocClick);
   document.removeEventListener("keydown", onKeydown);
 });
@@ -635,7 +658,14 @@ const filtersActive = computed(
           @near-end="onNearEnd"
           @context-menu="onContextMenu"
           @request-delete="deleteSelected"
+          @open="openViewer"
+          @section="section = $event"
         />
+
+        <!-- 顶部固定分段条：本段标题滚出顶部时钉住显示 -->
+        <div v-if="section.pinned && section.label" class="section-bar">
+          {{ section.label }}
+        </div>
 
         <!-- 状态 HUD：移出工具栏，数字变化不再推动其它控件（HIG：控件位置保持稳定） -->
         <div class="hud">
@@ -722,6 +752,15 @@ const filtersActive = computed(
         <AppIcon name="trash" :size="15" />删除选中…
       </button>
     </div>
+
+    <!-- ================= 单张查看 ================= -->
+    <PhotoViewer
+      v-if="viewerIndex !== null"
+      :assets="gridAssets"
+      :index="viewerIndex"
+      @close="viewerIndex = null"
+      @navigate="viewerIndex = $event"
+    />
 
     <!-- ================= 确认框 ================= -->
     <div v-if="confirmMsg" class="modal-backdrop" @click.self="answerConfirm(false)">
@@ -1179,6 +1218,23 @@ const filtersActive = computed(
   font-weight: 650;
   margin-right: 2px;
 }
+/* 顶部固定分段条：仅当本段标题滚出顶部时出现，避免与内联标题重复 */
+.section-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  pointer-events: none;
+  padding: 10px 16px;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--label);
+  background: linear-gradient(180deg, var(--bg) 72%, transparent);
+  backdrop-filter: blur(6px);
+}
+
 /* 状态 HUD：右下角浮层，不参与工具栏布局，数字变化不影响其它控件 */
 .hud {
   position: absolute;

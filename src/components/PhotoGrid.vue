@@ -38,6 +38,10 @@ const emit = defineEmits<{
   "context-menu": [id: number, x: number, y: number];
   /** 键盘 Delete：请求删除当前选中项。 */
   "request-delete": [];
+  /** 打开单张查看（单击未选中项 / 键盘 Enter）。 */
+  open: [id: number];
+  /** 当前所在分段：`pinned` 为该段标题已滚出顶部（父组件据此显示固定分段条）。 */
+  section: [payload: { label: string; pinned: boolean }];
 }>();
 
 function onTileEnter(cell: TileCell, e: MouseEvent) {
@@ -210,15 +214,11 @@ function onPointerMove(e: PointerEvent) {
 }
 
 function onPointerUp(e: PointerEvent) {
-  // 单纯单击已选中的那张 → 取消选择（比长按/拖拽撤销更直接）。
-  if (
-    e.type === "pointerup" &&
-    !didPaint &&
-    !didLongPress &&
-    pressedId !== null &&
-    pressedWasSelected
-  ) {
-    emit("toggle-select", pressedId);
+  // 单纯单击（未拖拽/未长按）：
+  //   已选中 → 取消选择；未选中 → 打开单张查看。
+  if (e.type === "pointerup" && !didPaint && !didLongPress && pressedId !== null) {
+    if (pressedWasSelected) emit("toggle-select", pressedId);
+    else emit("open", pressedId);
   }
   clearPressTimer();
   pressedId = null;
@@ -287,6 +287,10 @@ function onTileKeydown(cell: TileCell, e: KeyboardEvent) {
     case "Backspace":
       e.preventDefault();
       emit("request-delete");
+      return;
+    case "Enter":
+      e.preventDefault();
+      emit("open", cell.asset.id);
       return;
     default:
       return;
@@ -400,6 +404,26 @@ function resumeHoverUnderPointer() {
   emit("hover", { asset: cell.asset, rect: tile.getBoundingClientRect() });
 }
 
+/* ---------- 当前分段（供顶部固定分段条） ---------- */
+let lastSectionKey = "";
+function emitSection() {
+  const top = scrollTop.value;
+  let cur: { label: string; y: number; h: number } | null = null;
+  for (const row of layout.value.rows) {
+    if (row.type === "header") {
+      if (row.y <= top + 1) cur = { label: row.label, y: row.y, h: row.h };
+      else break;
+    }
+  }
+  const label = cur?.label ?? "";
+  // 标题已滚出顶部才需要固定条；标题在视口内时不重复显示
+  const pinned = !!cur && top > cur.y + cur.h - 2;
+  const key = `${label}|${pinned ? "p" : "v"}`;
+  if (key === lastSectionKey) return;
+  lastSectionKey = key;
+  emit("section", { label, pinned });
+}
+
 /** 接近底部时请求下一页（父组件的 loading 守卫去重）。 */
 function maybeLoadMore() {
   if (!props.hasMore) return;
@@ -464,6 +488,7 @@ function onScroll() {
     lastScrollY = y;
     scrollTop.value = y;
     ticking = false;
+    emitSection();
     // 慢速（滚轮/平滑滚动）→ 预载视口外，避免灰块；节流到 ~80ms，
     // 否则每帧给上百个瓦片挂 src 会拖垮边缘帧率。
     // 快速（拖滚动条）→ 不加载，等停稳后一次性加载（已优化的路径）。
@@ -558,6 +583,7 @@ onMounted(() => {
     settled.value = true;
     maybeLoadMore();
     emitNeedLarge();
+    emitSection();
   });
 });
 onBeforeUnmount(() => {
@@ -577,6 +603,12 @@ watch([() => layout.value.totalH, viewportH], () => maybeLoadMore());
 
 // 切到单列流时，为当前可见项请求高清大图。
 watch(() => props.masonry, () => nextTick(emitNeedLarge));
+
+// 分组/列数/粒度变化后刷新当前分段
+watch(
+  [() => props.groups, () => props.columns, () => props.granularity],
+  () => nextTick(emitSection),
+);
 
 // 换挡过渡：列数变化时给整块内容一次轻微的淡出/回弹，避免生硬切换。
 const reflowing = ref(false);
