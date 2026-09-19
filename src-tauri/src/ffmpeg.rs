@@ -219,7 +219,9 @@ pub(crate) fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Com
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        // 低于正常优先级：批量生成缩略图时，ffmpeg 让出 CPU，界面保持可响应。
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+        cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
     }
     cmd
 }

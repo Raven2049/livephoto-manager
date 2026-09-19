@@ -373,12 +373,30 @@ pub async fn generate_thumbs(
     tauri::async_runtime::spawn_blocking(move || -> anyhow::Result<importer::ThumbSummary> {
         let lib = Library::open(&root)?;
         let conn = crate::db::open(&lib.db_path())?;
-        let mut thumbs = FfmpegThumbs {
-            bin: crate::ffmpeg::find_ffmpeg()?,
-        };
+        let bin = crate::ffmpeg::find_ffmpeg()?;
+        // 缩略图是 CPU 密集：多进程并行；最多 4 个，避免大图并发解码占用过多内存。
+        let workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(1, 4);
         let should_cancel = || cancel.load(std::sync::atomic::Ordering::SeqCst);
-        importer::backfill_thumbs(&lib, &conn, &mut thumbs, &should_cancel, |s| {
-            let _ = app.emit("thumbs://progress", s);
+        let make =
+            |src: &std::path::Path, dir: &std::path::Path| -> anyhow::Result<std::path::PathBuf> {
+                let lower = src.to_string_lossy().to_ascii_lowercase();
+                if lower.ends_with(".mov") || lower.ends_with(".mp4") || lower.ends_with(".m4v") {
+                    crate::thumb::make_thumb_for_movie(&bin, src, dir)
+                } else {
+                    crate::thumb::make_thumb_for_still(&bin, src, dir)
+                }
+            };
+        let mut last = 0usize;
+        importer::backfill_thumbs(&lib, &conn, workers, make, &should_cancel, |s| {
+            // 节流：每 25 张或结束时上报一次，避免逐张跨 IPC 事件带来的额外开销。
+            let done = s.done + s.failed;
+            if done - last >= 25 || done == s.total {
+                last = done;
+                let _ = app.emit("thumbs://progress", s);
+            }
         })
     })
     .await

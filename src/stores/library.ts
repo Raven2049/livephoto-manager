@@ -200,12 +200,21 @@ export const useLibrary = defineStore("library", () => {
   async function generateThumbs() {
     busy.value = true;
     error.value = null;
+    thumbs.value = null;
+    // 后端节流上报进度；这里实时更新侧栏进度条，而不是等命令结束才有数字。
+    const un = await listen<{ total: number; done: number; failed: number }>(
+      "thumbs://progress",
+      (e) => {
+        thumbs.value = e.payload;
+      },
+    );
     try {
       thumbs.value = await invoke("generate_thumbs");
       await refresh();
     } catch (e) {
       error.value = String(e);
     } finally {
+      un();
       busy.value = false;
     }
   }

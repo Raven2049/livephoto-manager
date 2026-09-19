@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 
 use rusqlite::Connection;
 
@@ -161,46 +163,89 @@ pub struct ThumbSummary {
     pub failed: usize,
 }
 
-/// 为库里「缺少缩略图」的条目补生成缩略图。
-/// 命令 `generate_thumbs` 与测试共用此函数，避免逻辑重复。
-pub fn backfill_thumbs(
+/// 为库里「缺少缩略图」的条目补生成缩略图（**多线程**）。
+///
+/// 缩略图生成是 CPU 密集（实测单张 JPG ~260ms、HEIC ~580ms），串行会很慢。这里用
+/// `workers` 个线程并行跑 `make`，结果经 channel 回到**主线程串行写库**（SQLite 单写者）。
+/// `make` 由调用方注入（生产走 ffmpeg，测试可注入假实现）。
+pub fn backfill_thumbs<F>(
     lib: &crate::library::Library,
     conn: &Connection,
-    thumbs: &mut dyn Thumbs,
-    should_cancel: &dyn Fn() -> bool,
+    workers: usize,
+    make: F,
+    should_cancel: &(dyn Fn() -> bool + Sync),
     mut on_progress: impl FnMut(&ThumbSummary),
-) -> anyhow::Result<ThumbSummary> {
+) -> anyhow::Result<ThumbSummary>
+where
+    F: Fn(&Path, &Path) -> anyhow::Result<PathBuf> + Sync,
+{
     let jobs = crate::db::assets_missing_thumbs(conn)?;
     let total = jobs.len();
     let mut summary = ThumbSummary {
         total,
         ..Default::default()
     };
-
-    for job in &jobs {
-        if should_cancel() {
-            break;
-        }
-        let src = PathBuf::from(&job.source_path);
-        match thumbs.make(&src, &lib.thumbs_dir()) {
-            Ok(tp) => {
-                crate::db::set_thumb_path(conn, &job.dir, &job.base_name, &tp.to_string_lossy())?;
-                crate::db::set_asset_status(
-                    conn,
-                    &job.dir,
-                    &job.base_name,
-                    STATUS_TRANSCODED,
-                    None,
-                )?;
-                summary.done += 1;
-            }
-            Err(e) => {
-                summary.failed += 1;
-                eprintln!("缩略图失败 {}: {e:#}", job.base_name);
-            }
-        }
-        on_progress(&summary);
+    if total == 0 {
+        return Ok(summary);
     }
+
+    let thumbs_dir = lib.thumbs_dir();
+    let workers = workers.clamp(1, total);
+    let next = AtomicUsize::new(0);
+    let (tx, rx) = mpsc::channel::<(usize, anyhow::Result<PathBuf>)>();
+
+    std::thread::scope(|scope| -> anyhow::Result<()> {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let jobs = &jobs;
+            let thumbs_dir = &thumbs_dir;
+            let make = &make;
+            let next = &next;
+            scope.spawn(move || loop {
+                if should_cancel() {
+                    break;
+                }
+                let i = next.fetch_add(1, Ordering::SeqCst);
+                if i >= jobs.len() {
+                    break;
+                }
+                let job = &jobs[i];
+                let r = make(Path::new(&job.source_path), thumbs_dir);
+                if tx.send((i, r)).is_err() {
+                    break;
+                }
+            });
+        }
+        // 主线程只保留接收端：worker 全部结束、发送端断开后循环自然退出。
+        drop(tx);
+        for (i, r) in rx {
+            let job = &jobs[i];
+            match r {
+                Ok(tp) => {
+                    crate::db::set_thumb_path(
+                        conn,
+                        &job.dir,
+                        &job.base_name,
+                        &tp.to_string_lossy(),
+                    )?;
+                    crate::db::set_asset_status(
+                        conn,
+                        &job.dir,
+                        &job.base_name,
+                        STATUS_TRANSCODED,
+                        None,
+                    )?;
+                    summary.done += 1;
+                }
+                Err(e) => {
+                    summary.failed += 1;
+                    eprintln!("缩略图失败 {}: {e:#}", job.base_name);
+                }
+            }
+            on_progress(&summary);
+        }
+        Ok(())
+    })?;
 
     Ok(summary)
 }
@@ -683,8 +728,14 @@ mod tests {
         db::upsert_scanned_asset(&conn, "", &a, 0, 0).unwrap();
         db::set_asset_status(&conn, "", "IMG_1", STATUS_COPIED, None).unwrap();
 
-        let mut thumbs = FakeThumbs { fail: false };
-        let s = backfill_thumbs(&lib, &conn, &mut thumbs, &|| false, |_| {}).unwrap();
+        // 注入假实现：任意源都写一个 fake.webp。
+        let make = |_src: &Path, dir: &Path| -> anyhow::Result<PathBuf> {
+            std::fs::create_dir_all(dir).unwrap();
+            let p = dir.join("fake.webp");
+            std::fs::write(&p, b"x").unwrap();
+            Ok(p)
+        };
+        let s = backfill_thumbs(&lib, &conn, 2, make, &|| false, |_| {}).unwrap();
         assert_eq!(s.total, 1);
         assert_eq!(s.done, 1);
 
@@ -697,7 +748,7 @@ mod tests {
         assert_eq!(status, STATUS_TRANSCODED);
 
         // 第二次没有可回填的条目
-        let s2 = backfill_thumbs(&lib, &conn, &mut thumbs, &|| false, |_| {}).unwrap();
+        let s2 = backfill_thumbs(&lib, &conn, 2, make, &|| false, |_| {}).unwrap();
         assert_eq!(s2.total, 0);
     }
 }
